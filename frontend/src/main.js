@@ -1,60 +1,85 @@
-import './style.css'
-import heroImg from './assets/hero.png'
-import javascriptLogo from './assets/javascript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.js'
+import 'bootstrap/dist/css/bootstrap.min.css'
+import '@fontsource/inter/latin-400.css'
+import '@fontsource/inter/latin-500.css'
+import '@fontsource/inter/latin-600.css'
+import '@fontsource/inter/latin-700.css'
 
-document.querySelector('#app').innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${javascriptLogo}" class="framework" alt="JavaScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.js</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+import './styles/tokens.css'
+import './styles/base.css'
+import './styles/components.css'
+import './styles/layout.css'
 
-<div class="ticks"></div>
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  ChartColumn,
+  Coffee,
+  History,
+  Info,
+  LayoutDashboard,
+  Menu,
+  Package,
+  PanelLeft,
+  RefreshCw,
+  Settings,
+  Tags,
+  TriangleAlert,
+  Wifi,
+  X,
+  Zap,
+  createIcons,
+} from 'lucide'
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript" target="_blank">
-          <img class="button-icon" src="${javascriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+import { initializeSidebar } from './components/sidebar.js'
+import { initializeConnectivity } from './components/topbar.js'
+import { renderAppLayout } from './layouts/app-layout.js'
+import { renderDashboard } from './pages/dashboard.js'
+import { renderModulePlaceholder } from './pages/module-placeholder.js'
+import { routes, startRouter } from './router.js'
 
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
+function renderIcons(root) {
+  createIcons({
+    root,
+    icons: {
+      ArrowLeft, ArrowLeftRight, ChartColumn, Coffee, History, Info, LayoutDashboard, Menu,
+      Package, PanelLeft, RefreshCw, Settings, Tags, TriangleAlert, Wifi, X, Zap,
+    },
+  })
+}
 
-setupCounter(document.querySelector('#counter'))
+function mountApplication(app) {
+  app.innerHTML = renderAppLayout(routes)
+
+  const shell = app.querySelector('.app-shell')
+  const main = shell.querySelector('main')
+  const topbar = shell.querySelector('.app-topbar')
+  const currentPage = topbar.querySelector('[data-current-page]')
+  const sidebar = initializeSidebar(shell, () => {
+    main.querySelector('#page-title').focus({ preventScroll: true })
+    window.scrollTo(0, 0)
+  })
+
+  shell.querySelector('.app-skip-link').addEventListener('click', (event) => {
+    event.preventDefault()
+    main.focus()
+  })
+
+  initializeConnectivity(topbar)
+  renderIcons(shell)
+  startRouter((route, isInitial) => {
+    currentPage.textContent = route.title
+    main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
+    sidebar.setActiveRoute(route.id)
+    renderIcons(main)
+
+    if (!isInitial) sidebar.focusDestination()
+  })
+}
+
+const app = document.querySelector('#app')
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('showcase')) {
+  const { showDesignShowcase } = await import('./pages/showcase-preview.js')
+  showDesignShowcase(app)
+} else {
+  mountApplication(app)
+}
