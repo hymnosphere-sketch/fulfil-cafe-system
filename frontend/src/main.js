@@ -9,6 +9,7 @@ import './styles/base.css'
 import './styles/components.css'
 import './styles/layout.css'
 import './styles/dashboard.css'
+import './styles/inventory.css'
 
 import {
   ArrowLeft,
@@ -36,8 +37,10 @@ import {
 
 import { initializeSidebar } from './components/sidebar.js'
 import { initializeConnectivity } from './components/topbar.js'
+import { createDemoInventoryRepository } from './data/demo-inventory-repository.js'
 import { renderAppLayout } from './layouts/app-layout.js'
 import { loadDashboard, renderDashboard } from './pages/dashboard.js'
+import { createInventoryWorkspace } from './pages/inventory-workspace.js'
 import { renderModulePlaceholder } from './pages/module-placeholder.js'
 import { routes, startRouter } from './router.js'
 
@@ -55,6 +58,8 @@ function renderIcons(root) {
 function mountApplication(app) {
   app.innerHTML = renderAppLayout(routes)
 
+  const repository = createDemoInventoryRepository()
+  const inventoryWorkspace = createInventoryWorkspace({ repository, renderIcons })
   const shell = app.querySelector('.app-shell')
   const main = shell.querySelector('main')
   const topbar = shell.querySelector('.app-topbar')
@@ -73,15 +78,25 @@ function mountApplication(app) {
   renderIcons(shell)
   startRouter((route, isInitial) => {
     currentPage.textContent = route.title
-    main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
     sidebar.setActiveRoute(route.id)
-    renderIcons(main)
 
-    if (route.id === 'dashboard') {
-      const scenario = import.meta.env.DEV
-        ? new URLSearchParams(location.search).get('dashboard-state')
-        : undefined
-      void loadDashboard(main.querySelector('.inventory-dashboard'), { scenario, renderIcons })
+    if (route.id === 'inventory' || route.id === 'categories') {
+      inventoryWorkspace.mount(main, route.id)
+    } else {
+      main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
+      renderIcons(main)
+
+      if (route.id === 'dashboard') {
+        const scenario = import.meta.env.DEV
+          ? new URLSearchParams(location.search).get('dashboard-state')
+          : undefined
+        const isolatedScenario = ['empty', 'error', 'loading', 'unavailable'].includes(scenario)
+        void loadDashboard(main.querySelector('.inventory-dashboard'), {
+          scenario,
+          renderIcons,
+          readSnapshot: isolatedScenario ? undefined : repository.read,
+        })
+      }
     }
 
     if (!isInitial) sidebar.focusDestination()

@@ -181,8 +181,8 @@ export function renderDashboardResults(summary, {
       icon: 'info',
       title: hasHistory ? 'No active inventory items' : 'No inventory items yet',
       message: hasHistory
-        ? 'Historical movements remain visible below. Item creation and stock transactions are still in development.'
-        : 'Inventory items, stock alerts, and recent movements will appear here once records are available. Item creation and stock transactions are still in development.',
+        ? 'Historical movements remain visible below. Use Inventory to add demo items.'
+        : 'Inventory items, stock alerts, and recent movements will appear here once records are available. Use Inventory to add demo items.',
     }) : ''}
     <div class="dashboard-panel-grid">
       ${renderAttention(summary.attentionItems)}
@@ -236,8 +236,8 @@ export async function loadDashboard(page, { scenario, renderIcons, readSnapshot 
     const summary = summarizeInventory(snapshot, demoBusinessDate)
     markup = renderDashboardResults(summary, {
       businessDate: demoBusinessDate,
-      businessTimezone: snapshot.settings.business_timezone,
-      warningDays: snapshot.settings.expiration_warning_days,
+      businessTimezone: snapshot.settings?.business_timezone,
+      warningDays: snapshot.settings?.expiration_warning_days,
     })
     announcement.textContent = summary.counts.totalActive === 0
       ? 'Demo inventory loaded. No active items.'
