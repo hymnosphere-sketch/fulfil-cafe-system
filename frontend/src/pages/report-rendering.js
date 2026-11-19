@@ -73,11 +73,11 @@ function inventoryMetrics({ totalActive, sufficient, lowStock, outOfStock }) {
   </div>`)
 }
 
-export function renderReportsPage(view) {
+export function renderReportsPage(view, storageMode) {
   return `<div class="reports-workspace">
     ${renderPageHeader({ title: 'Reports', description: 'Review inventory levels, restocking needs, expiration, and stock movements.' })}
     <div class="report-stack">
-      <div data-report-context>${renderDemoContext(null, 'reports')}</div>
+      <div data-report-context>${renderDemoContext(null, 'reports', storageMode)}</div>
       <nav aria-label="Report views" class="report-nav">
         ${Object.entries(reportTitles).map(([id, title]) => `<a class="btn ${id === view ? 'btn-primary' : 'btn-outline-primary'}"
           href="${routeHref('reports', { view: id })}" data-report-view="${id}"${id === view ? ' aria-current="page"' : ''}>${title}</a>`).join('')}
@@ -94,7 +94,7 @@ export function renderReportLoading() {
 export function renderReportReadError() {
   return `<div role="alert">${renderMessage({
     tone: 'error', icon: 'circle-alert', title: 'Reports could not be loaded',
-    message: 'Try reading the shared demo records again.',
+    message: 'Try reading the saved local inventory again.',
   })}</div>
   <div><button type="button" class="btn btn-outline-primary" data-report-retry>Retry</button></div>`
 }
@@ -285,7 +285,7 @@ function renderMovements(data, filters, references) {
   if (!groups.length) return {
     count: `Showing 0 of ${formatCount(data.movements.length, 'movement record')}`,
     html: data.movements.length ? reportNote('No stock movements match', 'Choose another period or clear the filters to see more records.') :
-      reportNote('No stock movements match', 'The session has no recorded stock movements.'),
+      reportNote('No stock movements match', 'The local inventory has no recorded stock movements.'),
   }
   const hasOverflow = groups.some(({ quantityChange }) => quantityChange === null)
   const records = renderRecords('Stock Movements', ['Item', 'Category', 'Unit', 'Movement type', 'Movements', 'Net quantity change', 'Records'], groups.map((group) => {

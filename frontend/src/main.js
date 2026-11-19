@@ -39,16 +39,17 @@ import {
 } from 'lucide'
 
 import { initializeSidebar } from './components/sidebar.js'
-import { initializeConnectivity } from './components/topbar.js'
-import { createDemoInventoryRepository } from './data/demo-inventory-repository.js'
+import { renderStorageState } from './components/local-storage-status.js'
+import { initializeConnectivity, updateStorageStatus } from './components/topbar.js'
 import { renderAppLayout } from './layouts/app-layout.js'
 import { loadDashboard, renderDashboard } from './pages/dashboard.js'
 import { createInventoryWorkspace } from './pages/inventory-workspace.js'
-import { renderModulePlaceholder } from './pages/module-placeholder.js'
 import { createReportsWorkspace } from './pages/reports-workspace.js'
+import { renderSettings } from './pages/settings.js'
 import { createStockWorkspace } from './pages/stock-workspace.js'
 import { createTransactionHistory } from './pages/transaction-history.js'
-import { routes, startRouter } from './router.js'
+import { routeHref, routes, startRouter } from './router.js'
+import { createLocalInventorySession } from './services/local-inventory-session.js'
 
 function renderIcons(root) {
   createIcons({
@@ -61,14 +62,9 @@ function renderIcons(root) {
   })
 }
 
-function mountApplication(app) {
+function mountApplication(app, { demoRepository, scenario } = {}) {
   app.innerHTML = renderAppLayout(routes)
 
-  const repository = createDemoInventoryRepository()
-  const inventoryWorkspace = createInventoryWorkspace({ repository, renderIcons })
-  const stockWorkspace = createStockWorkspace({ repository, renderIcons })
-  const transactionHistory = createTransactionHistory({ repository, renderIcons })
-  const reportsWorkspace = createReportsWorkspace({ repository, renderIcons })
   const shell = app.querySelector('.app-shell')
   const main = shell.querySelector('main')
   const topbar = shell.querySelector('.app-topbar')
@@ -78,18 +74,51 @@ function mountApplication(app) {
     window.scrollTo(0, 0)
   })
 
-  shell.querySelector('.app-skip-link').addEventListener('click', (event) => {
-    event.preventDefault()
-    main.focus()
+  const storageMode = demoRepository ? 'isolated' : 'persistent'
+  let storageStatus = { state: demoRepository ? 'isolated' : 'opening' }
+  let activeRoute
+  let changeChannel
+  const session = demoRepository ? null : createLocalInventorySession({
+    onUpdate: showStorageStatus,
+    onCommit() { changeChannel?.postMessage('inventory-committed') },
   })
+  const repository = demoRepository ?? session.repository
+  const workspaceOptions = { repository, renderIcons, storageMode }
+  const inventoryWorkspace = createInventoryWorkspace(workspaceOptions)
+  const stockWorkspace = createStockWorkspace(workspaceOptions)
+  const transactionHistory = createTransactionHistory(workspaceOptions)
+  const reportsWorkspace = createReportsWorkspace(workspaceOptions)
 
-  initializeConnectivity(topbar)
-  renderIcons(shell)
-  startRouter((route, isInitial, parameters) => {
-    currentPage.textContent = route.title
-    sidebar.setActiveRoute(route.id)
+  function refreshDashboard() {
+    const dashboard = main.querySelector('.inventory-dashboard')
+    if (dashboard) void loadDashboard(dashboard, {
+      scenario,
+      renderIcons,
+      storageMode,
+      readSnapshot: scenario ? undefined : repository.read,
+    })
+  }
 
-    if (route.id === 'inventory' || route.id === 'categories') {
+  function refreshActiveView() {
+    if (activeRoute.route.id === 'inventory' || activeRoute.route.id === 'categories') inventoryWorkspace.refresh()
+    else if (activeRoute.route.id === 'stock') stockWorkspace.refresh()
+    else if (activeRoute.route.id === 'history') transactionHistory.refresh()
+    else if (activeRoute.route.id === 'reports') reportsWorkspace.refresh()
+    else if (activeRoute.route.id === 'dashboard') refreshDashboard()
+  }
+
+  function renderActiveView() {
+    const { route, parameters: originalParameters } = activeRoute
+    // Report and History filters can replace the URL without a route change.
+    const [path, query] = window.location.hash.split('?', 2)
+    const parameters = path === routeHref(route.id) ? new URLSearchParams(query) : originalParameters
+    if (route.id === 'settings') {
+      main.innerHTML = renderSettings(storageStatus)
+      renderIcons(main)
+    } else if (storageStatus.state !== 'ready' && storageStatus.state !== 'isolated') {
+      main.innerHTML = renderStorageState(route.title, storageStatus)
+      renderIcons(main)
+    } else if (route.id === 'inventory' || route.id === 'categories') {
       inventoryWorkspace.mount(main, route.id, { itemId: parameters.get('item') })
     } else if (route.id === 'stock') {
       stockWorkspace.mount(main, { workflow: parameters.get('workflow'), itemId: parameters.get('item') })
@@ -98,30 +127,74 @@ function mountApplication(app) {
     } else if (route.id === 'reports') {
       reportsWorkspace.mount(main, parameters)
     } else {
-      main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
+      main.innerHTML = renderDashboard()
       renderIcons(main)
-
-      if (route.id === 'dashboard') {
-        const scenario = import.meta.env.DEV
-          ? new URLSearchParams(location.search).get('dashboard-state')
-          : undefined
-        const isolatedScenario = ['empty', 'error', 'loading', 'unavailable'].includes(scenario)
-        void loadDashboard(main.querySelector('.inventory-dashboard'), {
-          scenario,
-          renderIcons,
-          readSnapshot: isolatedScenario ? undefined : repository.read,
-        })
-      }
+      refreshDashboard()
     }
+  }
 
-    if (!isInitial) sidebar.focusDestination()
+  function showStorageStatus(status, refreshView) {
+    const stateChanged = status.state !== storageStatus.state || status.error?.code !== storageStatus.error?.code
+    storageStatus = status
+    updateStorageStatus(topbar, storageStatus)
+    if (!activeRoute) return
+    if (stateChanged || activeRoute.route.id === 'settings') {
+      const focusedInView = main.contains(document.activeElement)
+      renderActiveView()
+      if (focusedInView) main.querySelector('#page-title')?.focus({ preventScroll: true })
+    } else if (refreshView) refreshActiveView()
+  }
+
+  shell.querySelector('.app-skip-link').addEventListener('click', (event) => {
+    event.preventDefault()
+    main.focus()
   })
+  main.addEventListener('click', (event) => {
+    if (event.target.closest('[data-storage-retry]')) void session?.initialize({ reopen: true })
+    else if (event.target.closest('[data-storage-reload]')) window.location.reload()
+  })
+
+  initializeConnectivity(topbar)
+  updateStorageStatus(topbar, storageStatus)
+  renderIcons(shell)
+  startRouter((route, isInitial, parameters) => {
+    activeRoute = { route, parameters }
+    currentPage.textContent = route.title
+    sidebar.setActiveRoute(route.id)
+    renderActiveView()
+    if (!isInitial) sidebar.focusDestination()
+    if (route.id === 'settings') void session?.refresh()
+  })
+
+  if (session) {
+    try {
+      changeChannel = new BroadcastChannel('fulfil-cafe-demo-inventory')
+      changeChannel.addEventListener('message', (event) => {
+        if (event.data === 'inventory-committed') void session.refresh(true)
+      })
+    } catch {
+      // Browser lifecycle refresh still works if cross-tab signals are unavailable.
+    }
+    const refreshOnReturn = () => {
+      if (!document.hidden) void session.refresh(true)
+    }
+    window.addEventListener('focus', refreshOnReturn)
+    document.addEventListener('visibilitychange', refreshOnReturn)
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) refreshOnReturn()
+    })
+    void session.initialize()
+  }
 }
 
 const app = document.querySelector('#app')
+const developmentScenario = import.meta.env.DEV ? new URLSearchParams(location.search).get('dashboard-state') : null
 if (import.meta.env.DEV && new URLSearchParams(location.search).has('showcase')) {
   const { showDesignShowcase } = await import('./pages/showcase-preview.js')
   showDesignShowcase(app)
+} else if (import.meta.env.DEV && ['empty', 'error', 'loading', 'unavailable'].includes(developmentScenario)) {
+  const { createDemoInventoryRepository } = await import('./data/demo-inventory-repository.js')
+  mountApplication(app, { demoRepository: createDemoInventoryRepository(), scenario: developmentScenario })
 } else {
   mountApplication(app)
 }

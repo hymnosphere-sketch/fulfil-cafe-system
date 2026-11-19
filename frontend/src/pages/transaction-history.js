@@ -239,7 +239,9 @@ function mountList(content, model, requestedFilters) {
   applyFilters(requestedFilters, false)
 }
 
-export function createTransactionHistory({ repository, renderIcons }) {
+export function createTransactionHistory({ repository, renderIcons, storageMode }) {
+  let refreshMounted
+
   function mount(main, params = new URLSearchParams()) {
     main.innerHTML = `
       <div class="history-workspace">
@@ -248,7 +250,7 @@ export function createTransactionHistory({ repository, renderIcons }) {
           description: 'Review recorded stock movements and the batches they affected.',
         })}
         <div class="inventory-stack">
-          ${renderDemoContext(null, 'history')}
+          ${renderDemoContext(null, 'history', storageMode)}
           <p class="cafe-muted cafe-supporting mb-0">Item and category names reflect the current catalog.</p>
           <div data-history-content aria-busy="true" role="status">Loading stock movements…</div>
         </div>
@@ -256,16 +258,20 @@ export function createTransactionHistory({ repository, renderIcons }) {
     `
     const root = main.firstElementChild
     const content = root.querySelector('[data-history-content]')
-    const filters = filtersFromURL(params)
     const movementId = params.get('movement')
+    let readSequence = 0
     renderIcons(root)
 
-    async function load({ retry = false } = {}) {
+    async function load({ retry = false, refresh = false } = {}) {
+      const attempt = ++readSequence
+      const hash = window.location.hash
+      const filters = filtersFromURL(refresh || retry ? new URLSearchParams(hash.split('?', 2)[1]) : params)
+      const isCurrent = () => root.isConnected && attempt === readSequence && window.location.hash === hash
       content.setAttribute('aria-busy', 'true')
       if (retry) content.textContent = 'Loading stock movements…'
       try {
         const snapshot = await repository.read()
-        if (!root.isConnected) return
+        if (!isCurrent()) return
         const model = buildTransactionHistory(snapshot)
         content.removeAttribute('role')
         if (!movementId) {
@@ -275,33 +281,33 @@ export function createTransactionHistory({ repository, renderIcons }) {
           const movement = model.movementById.get(movementId)
           if (movement) {
             content.innerHTML = renderTransactionDetail(movement, model.businessTimezone, filters)
-            if (root.contains(document.activeElement) || document.activeElement === document.body) {
+            if (!refresh && (root.contains(document.activeElement) || document.activeElement === document.body)) {
               content.querySelector('[data-history-detail-heading]').focus()
             }
           } else {
             content.innerHTML = `<div class="inventory-stack">
               ${renderMessage({
                 tone: 'info', icon: 'info', title: 'Transaction unavailable',
-                message: 'This movement is unavailable in the current demo session.',
+                message: 'This movement is unavailable in the local demo inventory.',
               })}
               <div><a class="btn btn-outline-primary" href="${escapeText(historyHref(filters))}">Back to history</a></div>
             </div>`
           }
         }
       } catch {
-        if (!root.isConnected) return
+        if (!isCurrent()) return
         content.removeAttribute('role')
         content.innerHTML = `<div class="inventory-stack" role="alert">
           ${renderMessage({
             tone: 'error', icon: 'circle-alert', title: 'Could not load transaction history',
-            message: 'Try reading the demo session again.',
+            message: 'Try reading the saved local inventory again.',
           })}
           <div><button type="button" class="btn btn-outline-primary" data-history-retry>Retry</button></div>
         </div>`
       } finally {
-        if (root.isConnected) {
+        if (root.isConnected && readSequence === attempt) {
           content.setAttribute('aria-busy', 'false')
-          renderIcons(content)
+          if (isCurrent()) renderIcons(content)
         }
       }
     }
@@ -310,8 +316,13 @@ export function createTransactionHistory({ repository, renderIcons }) {
       root.querySelector('#page-title').focus()
       void load({ retry: true })
     })
+    refreshMounted = () => {
+      const focused = document.activeElement
+      if (!root.isConnected || (content.contains(focused) && focused.closest('[data-history-filters]'))) return
+      return load({ refresh: true })
+    }
     void load()
   }
 
-  return { mount }
+  return { mount, refresh: () => refreshMounted?.() }
 }

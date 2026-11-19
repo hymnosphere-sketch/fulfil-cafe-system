@@ -1,73 +1,17 @@
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
+import { connectBrowser, element, quote, visible } from './browser-cdp.mjs'
 
 // Run against Vite and an isolated headless Chrome with CDP enabled.
 // Pass a directory as the first argument to save screenshots.
 const app = process.env.REPORTS_APP_URL ?? 'http://127.0.0.1:5196/'
 const chrome = process.env.REPORTS_CHROME_URL ?? 'http://127.0.0.1:9228'
 const screenshots = process.argv[2]
-const response = await fetch(chrome + '/json/new?about:blank', { method: 'PUT' })
-assert.ok(response.ok, 'Chrome opened a test tab')
-const target = await response.json()
-const socket = new WebSocket(target.webSocketDebuggerUrl)
-await new Promise((resolve, reject) => {
-  socket.addEventListener('open', resolve, { once: true })
-  socket.addEventListener('error', reject, { once: true })
-})
-
-const pending = new Map()
-const exceptions = []
-let nextCommand = 0
-socket.addEventListener('message', ({ data }) => {
-  const message = JSON.parse(data)
-  if (message.method === 'Runtime.exceptionThrown') exceptions.push(message.params.exceptionDetails.text)
-  const command = pending.get(message.id)
-  if (!command) return
-  pending.delete(message.id)
-  if (message.error) command.reject(new Error(message.error.message))
-  else command.resolve(message.result)
-})
-
-function cdp(method, params = {}) {
-  const id = ++nextCommand
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
-    socket.send(JSON.stringify({ id, method, params }))
-  })
-}
-
-async function evaluate(expression) {
-  const { result, exceptionDetails } = await cdp('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
-  if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text)
-  return result.value
-}
-
-async function until(expression, label) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await evaluate(expression).catch(() => false)) return
-    await delay(50)
-  }
-  assert.fail('Timed out waiting for ' + label + '. Page content: ' + await evaluate('document.querySelector("main")?.innerText.slice(0, 400)'))
-}
-
-const quote = JSON.stringify
-const element = (selector) => 'document.querySelector(' + quote(selector) + ')'
-const visible = (selector) => 'Array.from(document.querySelectorAll(' + quote(selector) + ')).find(node => node.getClientRects().length)'
-const click = async (selector) => {
-  await until(visible(selector), selector)
-  await evaluate(visible(selector) + '.click()')
-}
-const setField = async (selector, value) => {
-  await until(element(selector), selector)
-  await evaluate(`(() => {
-    const field = ${element(selector)}
-    field.value = ${quote(value)}
-    field.dispatchEvent(new Event(field.matches('select') ? 'change' : 'input', { bubbles: true }))
-  })()`)
-}
+const browser = await connectBrowser(chrome)
+const context = await browser.context()
+const { cdp, click, setField, evaluate, until, goto, reload, resize, exceptions } = await context.page()
 const route = (hash) => evaluate('location.hash = ' + quote('#/' + hash))
 const reportForm = '[data-report-filters]'
 const reportCount = element('[data-report-count]') + '?.textContent'
@@ -99,9 +43,9 @@ async function capture(name) {
   await writeFile(join(screenshots, name + '.png'), Buffer.from(data, 'base64'))
 }
 
-async function checkRefreshedRecord(kind, size) {
+async function checkPersistedRecord(kind, size) {
   const isItem = kind === 'item'
-  const name = 'Session-only report ' + kind
+  const name = `Persistent report ${kind} ${size}`
   const field = isItem ? '#report-itemId' : '#report-categoryId'
   const key = isItem ? 'itemId' : 'categoryId'
   const routeName = isItem ? 'inventory' : 'categories'
@@ -115,7 +59,7 @@ async function checkRefreshedRecord(kind, size) {
     await setField(form + ' [name="minimum_stock_level"]', '5')
   }
   await click(form + ' button[type="submit"]')
-  await until(`document.querySelector('[data-inventory-feedback]')?.textContent.includes(${quote('Demo ' + kind + ' saved')})`, 'session record saved')
+  await until(`document.querySelector('[data-inventory-feedback]')?.textContent.includes(${quote('Demo ' + kind + ' saved')})`, 'local record saved')
   await route(reportHash('movements'))
   await until(`${reportCount} === ${quote(allMovements)}`, 'unfiltered fixture')
   const recordId = await evaluate(`Array.from(${element(field)}.options).find(option => option.text.includes(${quote(name)}))?.value`)
@@ -128,22 +72,28 @@ async function checkRefreshedRecord(kind, size) {
   if (isItem) assert.ok((await evaluate(element('#report-item-selection') + '.textContent')).includes(recordId))
 
   const historyLength = await evaluate('history.length')
-  await cdp('Page.reload')
-  await checkReset(field)
+  await reload()
+  await until(`${element(field)}?.value === ${quote(recordId)} && ${reportCount} === "Showing 0 of 22 movement records"`, 'persisted filter and results')
+  assert.equal(await evaluate(params + '.' + key), recordId)
+  assert.equal(await evaluate(reportNotice + '.hidden'), true)
+  if (isItem) assert.ok((await evaluate(element('#report-item-selection') + '.textContent')).includes(recordId))
   assert.equal(await evaluate('history.length'), historyLength)
-  await capture(`stock-movements-cleared-${kind}-${size}`)
+  await capture(`stock-movements-persisted-${kind}-${size}`)
 }
 
 try {
-  await cdp('Runtime.enable')
   if (screenshots) await mkdir(screenshots, { recursive: true })
-  await cdp('Page.navigate', { url: app })
+  await goto(app)
+  await until(
+    'location.hash === "#/dashboard" && document.querySelector("[data-storage-state=ready]") && document.querySelector("[data-dashboard-results][aria-busy=false]")',
+    'default Dashboard and local storage ready',
+  )
   for (const [width, height] of [[1440, 900], [1280, 800], [800, 1280], [390, 844]]) {
     const size = width + 'x' + height
-    await test('refresh normalizes session item and category filters at ' + size, async () => {
-      await cdp('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
-      await checkRefreshedRecord('item', size)
-      await checkRefreshedRecord('category', size)
+    await test('refresh preserves valid saved item and category filters at ' + size, async () => {
+      await resize(width, height)
+      await checkPersistedRecord('item', size)
+      await checkPersistedRecord('category', size)
     })
   }
 
@@ -156,12 +106,15 @@ try {
     const historyLength = await evaluate('history.length')
     await route(reportHash('restocking', { categoryId: 'unavailable' }))
     await until(`${reportNotice}?.hidden === false && location.hash === "#/reports?view=restocking"`, 'canonical restocking entry')
+    // Items created by the preceding checks stay in IndexedDB across refresh.
+    const restockingCount = await evaluate(reportCount)
+    assert.match(restockingCount, /^Showing [1-9]\d* of [1-9]\d* restocking items$/)
     assert.equal(await evaluate('history.length'), historyLength + 1)
     await evaluate('history.back()')
     await until(matchesSavedSelection, 'Back restored the valid movement filters')
     assert.ok((await evaluate(element('#report-item-selection') + '.textContent')).includes(itemId))
     await evaluate('history.forward()')
-    await until(`${reportCount} === "Showing 5 of 5 restocking items"`, 'Forward restored corrected results')
+    await until(`${reportCount} === ${quote(restockingCount)}`, 'Forward restored corrected results')
     assert.equal(await evaluate('location.hash'), '#/reports?view=restocking')
   })
 
@@ -222,6 +175,6 @@ try {
   })
   assert.deepEqual(exceptions, [], 'no uncaught browser exceptions')
 } finally {
-  socket.close()
-  await fetch(chrome + '/json/close/' + target.id)
+  await context.dispose()
+  browser.close()
 }

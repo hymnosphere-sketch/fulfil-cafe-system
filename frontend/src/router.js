@@ -5,7 +5,7 @@ export const routes = [
   { id: 'categories', title: 'Categories', icon: 'tags', description: 'Organize ingredients and supplies into categories.' },
   { id: 'history', title: 'Transaction History', shortTitle: 'History', icon: 'history', description: 'Review stock movements and the changes they made to inventory.' },
   { id: 'reports', title: 'Reports', icon: 'chart-column', description: 'Review inventory levels, stock alerts, expiration, and movement summaries.' },
-  { id: 'settings', title: 'Settings', icon: 'settings', description: 'Review application preferences and approved synchronization and recovery options.' },
+  { id: 'settings', title: 'Settings', icon: 'settings', description: 'Review local inventory storage and application status.' },
 ]
 
 export function routeHref(id, parameters) {

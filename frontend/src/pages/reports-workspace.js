@@ -99,42 +99,53 @@ function mountReportPanel(content, view, data, parameters, renderIcons) {
   displayResults(initial)
 }
 
-export function createReportsWorkspace({ repository, renderIcons }) {
+export function createReportsWorkspace({ repository, renderIcons, storageMode }) {
+  let refreshMounted
+
   function mount(main, parameters = new URLSearchParams()) {
     const requested = parameters.get('view')
     const view = Object.hasOwn(reportTitles, requested) ? requested : 'inventory'
-    main.innerHTML = renderReportsPage(view)
+    main.innerHTML = renderReportsPage(view, storageMode)
     const root = main.firstElementChild
     const content = root.querySelector('[data-report-content]')
-    const mountedHash = window.location.hash
+    let readSequence = 0
     renderIcons(root)
 
-    async function load() {
+    async function load({ refresh = false } = {}) {
+      const attempt = ++readSequence
+      const hash = window.location.hash
+      const filters = refresh ? new URLSearchParams(hash.split('?', 2)[1]) : parameters
+      const isCurrent = () => root.isConnected && readSequence === attempt && window.location.hash === hash
       content.setAttribute('aria-busy', 'true')
-      content.innerHTML = renderReportLoading()
+      if (!refresh) content.innerHTML = renderReportLoading()
       try {
         const snapshot = await repository.read()
-        if (!root.isConnected || window.location.hash !== mountedHash) return
+        if (!isCurrent()) return
         const data = buildInventoryReports(snapshot)
         const context = root.querySelector('[data-report-context]')
-        context.innerHTML = renderDemoContext(data.inventory, 'inventory')
+        context.innerHTML = renderDemoContext(data.inventory, 'inventory', storageMode)
         renderIcons(context)
-        mountReportPanel(content, view, data, parameters, renderIcons)
+        mountReportPanel(content, view, data, filters, renderIcons)
       } catch {
-        if (!root.isConnected) return
+        if (!isCurrent()) return
         content.innerHTML = renderReportReadError()
         renderIcons(content)
         content.querySelector('[data-report-retry]').addEventListener('click', () => {
           root.querySelector('#page-title').focus()
-          void load()
+          void load({ refresh })
         })
       } finally {
-        if (root.isConnected) content.setAttribute('aria-busy', 'false')
+        if (root.isConnected && readSequence === attempt) content.setAttribute('aria-busy', 'false')
       }
     }
 
+    refreshMounted = () => {
+      const focused = document.activeElement
+      if (!root.isConnected || (content.contains(focused) && focused.closest('[data-report-filters]'))) return
+      return load({ refresh: true })
+    }
     void load()
   }
 
-  return { mount }
+  return { mount, refresh: () => refreshMounted?.() }
 }

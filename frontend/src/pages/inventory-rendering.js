@@ -3,6 +3,7 @@ import { renderBadge, renderMessage } from '../components/status.js'
 import { routeHref } from '../router.js'
 import { filterAndSortInventory } from '../services/inventory-read-model.js'
 import { formatQuantity, movementLabels } from '../utils/dashboard-format.js'
+import { demoStorageNotice } from './demo-data-notice.js'
 
 const stockBadges = {
   sufficient: { label: 'Sufficient stock', tone: 'success', icon: 'package' },
@@ -59,13 +60,13 @@ export function renderInventoryQuantity(quantity, unit, signed = false) {
   return `${escapeInventoryText(display.amount)} ${escapeInventoryText(display.unit)}`
 }
 
-export function renderDemoContext(model, module) {
+export function renderDemoContext(model, module, storageMode) {
   const date = model ? ` Demo date ${renderDate(model.businessDate)} · ${escapeInventoryText(model.businessTimezone)}.` : ''
   return renderMessage({
     tone: 'info',
     icon: 'info',
     title: 'Fictional demonstration data',
-    message: `Changes last for this session and reset when the page is refreshed.${module === 'inventory' ? date : ''}`,
+    message: demoStorageNotice(storageMode) + (module === 'inventory' ? date : ''),
   })
 }
 

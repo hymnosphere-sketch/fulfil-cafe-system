@@ -66,18 +66,18 @@ function renderDate(value) {
   return `<time datetime="${escape(value)}">${civilDateFormat.format(date)}</time>`
 }
 
-export function renderStockContext(model) {
-  return renderDemoContext(model, 'inventory')
+export function renderStockContext(model, storageMode) {
+  return renderDemoContext(model, 'inventory', storageMode)
 }
 
-export function renderStockWorkspace() {
+export function renderStockWorkspace(storageMode) {
   return `<div class="stock-workspace" data-stock-workspace>
     ${renderPageHeader({
       title: 'Stock Management',
       description: 'Receive deliveries, record usage and wastage, and make stock adjustments.',
     })}
     <div class="stock-stack">
-      <div data-stock-context>${renderStockContext(null)}</div>
+      <div data-stock-context>${renderStockContext(null, storageMode)}</div>
       <div data-stock-content aria-busy="true"></div>
     </div>
   </div>`
@@ -320,7 +320,7 @@ export function renderStockForm(draft, model) {
   </article>`
 }
 
-export function renderStockConfirmation(preview, busy = false, itemBatches = []) {
+export function renderStockConfirmation(preview, busy = false, itemBatches = [], error = null, storageMode) {
   const unit = preview.item.unit
   const references = shortRecordReferences([
     ...itemBatches.map(({ batchId }) => batchId),
@@ -352,9 +352,15 @@ export function renderStockConfirmation(preview, busy = false, itemBatches = [])
           ])}
         </li>`).join('')}
       </ul>
-      <p class="cafe-muted mb-0">Recording this movement will update the shared demo session.</p>
+      <p class="cafe-muted mb-0">${storageMode === 'isolated'
+        ? 'Confirming adds this movement to the temporary demo inventory.'
+        : 'Confirming saves this movement in this browser.'}</p>
+      ${error ? `<div role="alert" tabindex="-1" data-stock-confirm-error>${renderMessage({
+        tone: 'error', icon: 'circle-alert', title: 'Could not confirm the movement',
+        message: escape(error.message) + ' Retry this confirmation to use the same movement review.',
+      })}</div>` : ''}
       <div class="stock-actions">
-        <button class="btn btn-primary" type="button" data-stock-confirm${busy ? ' disabled' : ''}>Confirm and record</button>
+        <button class="btn btn-primary" type="button" data-stock-confirm${busy ? ' disabled' : ''}>${error ? 'Retry confirmation' : 'Confirm and record'}</button>
         <button class="btn btn-outline-primary" type="button" data-stock-back${busy ? ' disabled' : ''}>Back to form</button>
         <button class="btn btn-outline-primary" type="button" data-stock-cancel${busy ? ' disabled' : ''}>Cancel</button>
       </div>
@@ -362,13 +368,14 @@ export function renderStockConfirmation(preview, busy = false, itemBatches = [])
   </article>`
 }
 
-export function renderStockSuccess(result) {
+export function renderStockSuccess(result, storageMode) {
   const { item_id: item, movement_id: movement } = result.movement
+  const isolated = storageMode === 'isolated'
   return `<section class="stock-stack" aria-labelledby="stock-result-heading">
     <h2 id="stock-result-heading" class="mb-0" data-stock-heading tabindex="-1">Movement recorded</h2>
     <div role="status">${renderMessage({
-      tone: 'success', icon: 'info', title: 'Demo session updated',
-      message: 'Stock movement recorded for this demo session. Changes reset when the page is refreshed.',
+      tone: 'success', icon: 'info', title: isolated ? 'Temporary demo inventory updated' : 'Local demo inventory updated',
+      message: isolated ? 'Stock movement saved in this temporary session.' : 'Stock movement saved in this browser.',
     })}</div>
     <div class="stock-actions">
       ${renderLink(routeHref('history', { item, movement }), 'View transaction', { primary: true, icon: 'history' })}

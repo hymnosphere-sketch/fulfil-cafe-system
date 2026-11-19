@@ -1,4 +1,5 @@
 import { renderBadge } from './status.js'
+import { describeStorage } from './local-storage-status.js'
 
 export function renderTopbar() {
   return `
@@ -22,11 +23,26 @@ export function renderTopbar() {
           <i data-lucide="wifi" aria-hidden="true"></i>
           <span data-browser-status-label></span>
         </span>
+        <span class="badge cafe-badge cafe-tone--info" data-storage-status data-storage-state="opening" role="status">
+          <i data-lucide="package" aria-hidden="true"></i>
+          <span data-storage-status-label>Opening local storage</span>
+        </span>
         ${renderBadge({ tone: 'disabled', icon: 'refresh-cw', label: 'Sync not configured' })}
         <span class="preview-label">Development Preview</span>
       </div>
     </header>
   `
+}
+
+export function updateStorageStatus(topbar, storage) {
+  const status = topbar.querySelector('[data-storage-status]')
+  const label = status.querySelector('[data-storage-status-label]')
+  const { kind, tone, label: text } = describeStorage(storage)
+
+  status.dataset.storageState = kind
+  status.classList.remove('cafe-tone--info', 'cafe-tone--success', 'cafe-tone--warning', 'cafe-tone--error')
+  status.classList.add('cafe-tone--' + tone)
+  if (label.textContent !== text) label.textContent = text
 }
 
 export function initializeConnectivity(topbar) {

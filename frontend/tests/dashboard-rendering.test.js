@@ -122,7 +122,21 @@ test('a completed mock read cannot render into a page that was left during loadi
   finishRead(snapshot)
   await pending
   assert.equal(results.innerHTML, '')
-  assert.equal(results.attributes.size, 0)
+  assert.deepEqual([...results.attributes], [['aria-busy', 'true']])
+})
+
+test('an older dashboard read cannot replace a newer render on the same page', async () => {
+  const { page, results } = dashboardPage()
+  let finishRead
+  const older = loadDashboard(page, {
+    readSnapshot: () => new Promise((resolve) => { finishRead = resolve }),
+    renderIcons() { assert.fail('Superseded results should never render icons') },
+  })
+  await loadDashboard(page, { readSnapshot: () => readDemoInventory({ scenario: 'empty' }), renderIcons() {} })
+  finishRead(await readDemoInventory())
+  await older
+  assert.match(results.innerHTML, /No inventory items yet/)
+  assert.equal(results.attributes.get('aria-busy'), 'false')
 })
 
 test('dashboard uses the balance data when the expiration settings record is absent', async () => {

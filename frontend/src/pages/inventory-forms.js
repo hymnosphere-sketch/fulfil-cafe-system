@@ -73,13 +73,14 @@ function renderItemFields(values, model, error, item) {
   `
 }
 
-function renderDuplicateWarning(model, draft) {
-  const matches = draft.duplicateIds.map((id) => model.itemById.get(id)).filter(Boolean)
-  if (!matches.length) return ''
+function renderDuplicateWarning(draft) {
+  if (!draft.duplicateReview) return ''
+  const { matches, updated } = draft.duplicateReview
 
   return `<section class="inventory-duplicate cafe-tone--warning" aria-labelledby="duplicate-item-title" data-duplicate-warning>
     <h3 id="duplicate-item-title" tabindex="-1">Possible duplicate items</h3>
-    <p>These records have a matching name under demo matching. Review their category, unit, and stock before continuing. To record a delivery, choose Receive stock on the existing item. Your catalog draft stays open for this session.</p>
+    ${updated ? '<p role="status">The matching records changed. Review the updated list before confirming again.</p>' : ''}
+    <p>These records have a matching name under demo matching. Review their category, unit, and stock before continuing. To record a delivery, choose Receive stock on the existing item. You can return to this unsaved draft while this tab stays open.</p>
     <ul class="inventory-records list-unstyled">${matches.map((item) => `<li class="inventory-record inventory-category-record">
       <div>
         <strong>${escapeInventoryText(item.name)}</strong>
@@ -115,16 +116,16 @@ export function renderRecordForm({ module, draft, model }) {
     <div class="card-body inventory-stack">
       <h2 id="record-form-title" data-inventory-section-title tabindex="-1" class="mb-0">${title}</h2>
       ${isItem ? `<p class="cafe-muted mb-0">${itemHelp}</p>` : ''}
-      <p class="cafe-muted cafe-supporting mb-0">Fields marked * are required. You can switch modules and return to this draft during this session.</p>
+      <p class="cafe-muted cafe-supporting mb-0">Fields marked * are required. Submit the form to save this draft. You can switch modules and return to it while this tab stays open.</p>
       ${draft.error?.field == null && draft.error ? `<div role="alert" tabindex="-1" data-form-error>${renderMessage({ tone: 'error', icon: 'circle-alert', title: 'Could not save the demo record', message: escapeInventoryText(draft.error.message) })}</div>` : ''}
       <form data-inventory-form novalidate>
         <fieldset class="inventory-stack" ${draft.busy ? 'disabled' : ''}>
           ${isItem ? `<div class="inventory-item-fields">${fields}</div>` : fields}
           <div class="inventory-actions">
-            <button class="btn btn-primary" type="submit"${draft.duplicateIds.length ? ' hidden' : ''}>${draft.busy ? 'Saving…' : `Save ${noun}`}</button>
+            <button class="btn btn-primary" type="submit"${draft.duplicateReview ? ' hidden' : ''}>${draft.busy ? 'Saving…' : `Save ${noun}`}</button>
             ${renderInventoryAction('cancel-form', 'Cancel')}
           </div>
-          ${isItem ? renderDuplicateWarning(model, draft) : ''}
+          ${isItem ? renderDuplicateWarning(draft) : ''}
         </fieldset>
       </form>
     </div>

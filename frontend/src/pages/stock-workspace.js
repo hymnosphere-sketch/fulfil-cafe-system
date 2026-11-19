@@ -102,7 +102,7 @@ function showIncompleteDateError(view, input) {
   refreshStockTotals(view)
 }
 
-export function createStockWorkspace({ repository, renderIcons }) {
+export function createStockWorkspace({ repository, renderIcons, storageMode }) {
   const drafts = new Map()
   let currentView
 
@@ -125,17 +125,17 @@ export function createStockWorkspace({ repository, renderIcons }) {
     if (!isActive(view)) return
     const { draft, content, model } = view
     if (!draft) content.innerHTML = renderStockLanding()
-    else if (draft.result) content.innerHTML = renderStockSuccess(draft.result)
+    else if (draft.result) content.innerHTML = renderStockSuccess(draft.result, storageMode)
     else if (draft.preview) {
       const batches = model?.itemById.get(draft.preview.item.itemId)?.batches
-      content.innerHTML = renderStockConfirmation(draft.preview, draft.busy, batches)
+      content.innerHTML = renderStockConfirmation(draft.preview, draft.busy, batches, draft.error, storageMode)
     }
     else if (model) content.innerHTML = renderStockForm(draft, model)
     renderIcons(content)
     const target = preserveFocus
       ? content.querySelector(preserveFocus) ?? content.querySelector('[data-stock-heading]')
       : focus === 'error'
-        ? content.querySelector('[aria-invalid="true"], [data-stock-form-error]')
+        ? content.querySelector('[aria-invalid="true"], [data-stock-form-error], [data-stock-confirm-error]')
         : focus && content.querySelector('[data-stock-heading]')
     target?.focus({ preventScroll: Boolean(preserveFocus) })
   }
@@ -156,7 +156,7 @@ export function createStockWorkspace({ repository, renderIcons }) {
         draft.itemId = ''
         draft.allocations.clear()
       }
-      view.context.innerHTML = renderStockContext(model)
+      view.context.innerHTML = renderStockContext(model, storageMode)
       renderIcons(view.context)
       render(view, options)
     } catch {
@@ -265,23 +265,28 @@ export function createStockWorkspace({ repository, renderIcons }) {
     if (!draft?.preview || draft.busy) return
     draft.busy = true
     view.content.querySelectorAll('button').forEach((button) => { button.disabled = true })
+    view.content.querySelector('[data-stock-confirm]').textContent = 'Saving…'
+    let keepReview = false
     try {
       draft.result = await repository.recordStockMovement(draft.preview.attemptId)
       draft.error = null
     } catch (error) {
       draft.error = validationError(error, draft)
+      // A storage interruption may be retried with the reviewed ID. A stale or
+      // invalid review must return to a fresh read before it can be prepared again.
+      keepReview = typeof error?.code !== 'string' || error.code.startsWith('DB_')
     } finally {
-      discardPreview(draft)
+      if (!keepReview) discardPreview(draft)
       draft.busy = false
       const current = viewFor(draft)
-      if (current && draft.error) await load(current, { focus: 'error' })
-      else if (current) render(current, { focus: 'heading' })
+      if (current && draft.error && !keepReview) await load(current, { focus: 'error' })
+      else if (current) render(current, { focus: draft.error ? 'error' : 'heading' })
     }
   }
 
   function mount(main, { workflow, itemId } = {}) {
     const validWorkflow = Object.hasOwn(stockWorkflows, workflow)
-    main.innerHTML = renderStockWorkspace()
+    main.innerHTML = renderStockWorkspace(storageMode)
     const root = main.firstElementChild
     const view = {
       root, ...(validWorkflow ? draftFor(workflow, itemId || '') : {}), requestedItemId: itemId, model: null, read: 0,
@@ -308,6 +313,7 @@ export function createStockWorkspace({ repository, renderIcons }) {
       if (button.matches('[data-stock-confirm]')) void record(view)
       if (button.matches('[data-stock-back]')) {
         discardPreview(draft)
+        draft.error = null
         render(view, { focus: 'heading' })
       }
       if (button.matches('[data-stock-cancel]')) {
@@ -326,5 +332,13 @@ export function createStockWorkspace({ repository, renderIcons }) {
     void load(view)
   }
 
-  return { mount }
+  function refresh() {
+    const view = currentView
+    if (!view || !isActive(view) || view.draft?.busy) return
+    const focused = document.activeElement
+    if (view.content.contains(focused) && focused.closest('[data-stock-form]')) return
+    return load(view, { preserveFocus: view.content.contains(focused) && focused.id ? '#' + CSS.escape(focused.id) : undefined })
+  }
+
+  return { mount, refresh }
 }

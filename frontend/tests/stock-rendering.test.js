@@ -86,6 +86,14 @@ test('stock confirmation displays signed changes and escapes user text and ident
   assert.match(html, /Expiration date<\/dt><dd>Not recorded/)
   assert.match(renderStockSuccess({ movement: { item_id: 'one&two', movement_id: 'movement' } }),
     /#\/history\?item=one%26two&amp;movement=movement/)
+  const failed = renderStockConfirmation(preview, false, [], { message: '<Storage error>' })
+  assert.match(failed, /role="alert" tabindex="-1" data-stock-confirm-error/)
+  assert.match(failed, /&lt;Storage error&gt;/)
+  assert.match(failed, /data-stock-confirm>Retry confirmation/)
+  assert.doesNotMatch(failed, /<Storage error>|Movement recorded/)
+  const isolated = renderStockSuccess({ movement: { item_id: 'one', movement_id: 'movement' } }, 'isolated')
+  assert.match(isolated, /saved in this temporary session/)
+  assert.doesNotMatch(isolated, /saved in this browser/)
 })
 
 test('preview distinguishes an empty draft, invalid magnitudes and unavailable exact balances', async () => {

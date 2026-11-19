@@ -7,11 +7,13 @@ import { demoBusinessDate } from '../data/demo-inventory.js'
 import { routeHref } from '../router.js'
 import { summarizeInventory } from '../services/inventory-summary.js'
 import { formatExpirationWindowEnd, formatQuantity, movementLabels } from '../utils/dashboard-format.js'
+import { demoStorageNotice } from './demo-data-notice.js'
 
 const ATTENTION_LIMIT = 5
 const numberFormat = new Intl.NumberFormat('en-PH')
 const percentFormat = new Intl.NumberFormat('en-PH', { style: 'percent', maximumFractionDigits: 1 })
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' })
+const dashboardReads = new WeakMap()
 
 const alertBadges = {
   'out-of-stock': { label: 'Out of stock', tone: 'error', icon: 'circle-alert' },
@@ -137,12 +139,12 @@ function renderDistribution({ sufficient, lowStock, outOfStock, totalActive }) {
   })
 }
 
-function renderQuickActions() {
+function renderQuickActions(storageMode) {
   return renderCard({
     id: 'dashboard-quick-actions',
     title: 'Quick actions',
     content: `
-      <p class="cafe-muted cafe-supporting" id="dashboard-actions-note">Stock movements use fictional data and reset when the page is refreshed.</p>
+      <p class="cafe-muted cafe-supporting" id="dashboard-actions-note">${demoStorageNotice(storageMode)}</p>
       <div class="dashboard-quick-actions d-flex flex-wrap gap-2">
         <a class="btn btn-primary" href="${routeHref('stock', { workflow: 'receive' })}" aria-describedby="dashboard-actions-note">
           <i data-lucide="package-plus" aria-hidden="true"></i> Receive stock
@@ -159,6 +161,7 @@ export function renderDashboardResults(summary, {
   businessDate = demoBusinessDate,
   businessTimezone = 'Asia/Manila',
   warningDays,
+  storageMode,
 } = {}) {
   const demoDate = dateFormat.format(new Date(`${businessDate}T00:00:00Z`))
   const hasHistory = summary.recentMovements.length > 0
@@ -182,7 +185,7 @@ export function renderDashboardResults(summary, {
     </div>
     <div class="dashboard-panel-grid">
       ${renderDistribution(summary.counts)}
-      ${renderQuickActions()}
+      ${renderQuickActions(storageMode)}
     </div>
   `
 }
@@ -215,27 +218,35 @@ function renderReadError() {
   `
 }
 
-export async function loadDashboard(page, { scenario, renderIcons, readSnapshot = readDemoInventory }) {
+export async function loadDashboard(page, {
+  scenario, renderIcons, readSnapshot = readDemoInventory,
+  storageMode = readSnapshot === readDemoInventory ? 'isolated' : 'persistent',
+}) {
   const results = page.querySelector('[data-dashboard-results]')
   const announcement = page.querySelector('[data-dashboard-announcement]')
+  const read = Symbol()
+  dashboardReads.set(page, read)
+  const isCurrent = () => results.isConnected && dashboardReads.get(page) === read
   announcement.textContent = 'Loading demo inventory.'
+  results.setAttribute('aria-busy', 'true')
 
   let markup
   try {
     const snapshot = await readSnapshot({ scenario })
-    if (!results.isConnected) return
+    if (!isCurrent()) return
 
     const summary = summarizeInventory(snapshot, demoBusinessDate)
     markup = renderDashboardResults(summary, {
       businessDate: demoBusinessDate,
       businessTimezone: snapshot.settings?.business_timezone,
       warningDays: snapshot.settings?.expiration_warning_days,
+      storageMode,
     })
     announcement.textContent = summary.counts.totalActive === 0
       ? 'Demo inventory loaded. No active items.'
       : 'Demo inventory loaded.'
   } catch {
-    if (!results.isConnected) return
+    if (!isCurrent()) return
 
     markup = renderReadError()
     announcement.textContent = ''
@@ -248,7 +259,7 @@ export async function loadDashboard(page, { scenario, renderIcons, readSnapshot 
     page.querySelector('#page-title').focus({ preventScroll: true })
     results.setAttribute('aria-busy', 'true')
     results.innerHTML = '<p class="cafe-muted mb-0">Loading demo inventory…</p>'
-    void loadDashboard(page, { scenario, renderIcons, readSnapshot })
+    void loadDashboard(page, { scenario, renderIcons, readSnapshot, storageMode })
   }, { once: true })
   renderIcons(results)
 }
