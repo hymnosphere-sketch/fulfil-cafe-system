@@ -109,7 +109,8 @@ function calculateBalances(items, batches, history) {
   const itemBalances = new Map([...items.keys()].map((id) => [id, 0]))
   const batchBalances = new Map()
 
-  // Stable sorting preserves the snapshot's recorded order when timestamps are equal.
+  // Equal timestamps use fixture order here. Production history needs an authoritative
+  // record order for ties before persisted movements can be replayed safely.
   const chronological = [...history].sort((left, right) => left.timestamp - right.timestamp)
   for (const { movement, allocations } of chronological) {
     let allocated = 0
@@ -135,31 +136,34 @@ function calculateBalances(items, batches, history) {
   return { itemBalances, batchBalances }
 }
 
+function classifyBatchExpiration(batch, remainingQuantity, today, warningDays) {
+  if (batch.expiration_date == null) return 'undated'
+
+  const expirationDay = civilDay(batch.expiration_date, 'batch expiration date')
+  if (remainingQuantity === 0) return 'depleted'
+  if (expirationDay < today) return 'expired'
+  if (warningDays === null) return 'warning-period-unset'
+  return expirationDay - today <= warningDays ? 'expiring-soon' : 'current'
+}
+
 function collectExpirationAlerts(batches, items, batchBalances, today, warningDays) {
   let hasDatedStock = false
   const alertsByItem = new Map()
+  const batchExpirationStatuses = new Map()
   for (const batch of batches.values()) {
-    if (batch.expiration_date == null) continue
-
-    const expirationDay = civilDay(batch.expiration_date, 'batch expiration date')
-    if (!items.get(batch.item_id).is_active || batchBalances.get(batch.batch_id) === 0) continue
-
-    hasDatedStock = true
-    const daysUntilExpiry = expirationDay - today
-    let alert
-    if (daysUntilExpiry < 0) {
-      alert = 'expired'
-    } else if (warningDays !== null && daysUntilExpiry <= warningDays) {
-      alert = 'expiring-soon'
+    const status = classifyBatchExpiration(batch, batchBalances.get(batch.batch_id), today, warningDays)
+    batchExpirationStatuses.set(batch.batch_id, status)
+    if (items.get(batch.item_id).is_active && status !== 'undated' && status !== 'depleted') {
+      hasDatedStock = true
     }
 
-    if (alert) {
+    if (status === 'expired' || status === 'expiring-soon') {
       if (!alertsByItem.has(batch.item_id)) alertsByItem.set(batch.item_id, new Set())
-      alertsByItem.get(batch.item_id).add(alert)
+      alertsByItem.get(batch.item_id).add(status)
     }
   }
 
-  return { alertsByItem, hasDatedStock }
+  return { alertsByItem, batchExpirationStatuses, hasDatedStock }
 }
 
 function compareText(left, right) {
@@ -173,22 +177,30 @@ function compareAttention(left, right) {
     compareText(left.itemId, right.itemId)
 }
 
-function recentMovementsFor(history, items) {
+function sortMovementHistoryForDisplay(history) {
   return [...history]
     .sort((left, right) => right.timestamp - left.timestamp ||
       compareText(left.movement.movement_id, right.movement.movement_id))
-    .slice(0, 5)
-    .map(({ movement }) => {
-      const item = items.get(movement.item_id)
-      return {
-        movementId: movement.movement_id,
-        itemName: item.name,
-        type: movement.movement_type,
-        quantity: movement.quantity_change,
-        unit: item.unit_of_measurement,
-        timestamp: movement.created_at,
-      }
-    })
+    .map(({ movement }) => ({ ...movement }))
+}
+
+function recentMovementsFor(movements, items) {
+  return movements.slice(0, 5).map((movement) => {
+    const item = items.get(movement.item_id)
+    return {
+      movementId: movement.movement_id,
+      itemName: item.name,
+      type: movement.movement_type,
+      quantity: movement.quantity_change,
+      unit: item.unit_of_measurement,
+      timestamp: movement.created_at,
+    }
+  })
+}
+
+export function classifyStock(quantity, minimumStockLevel) {
+  if (quantity === 0) return 'out-of-stock'
+  return quantity <= minimumStockLevel ? 'low-stock' : 'sufficient'
 }
 
 // The caller chooses the business date as YYYY-MM-DD and the snapshot is never mutated.
@@ -223,7 +235,9 @@ export function summarizeInventory(snapshot, businessDate) {
 
   const history = indexHistory(movements, allocations, items, batches)
   const { itemBalances, batchBalances } = calculateBalances(items, batches, history)
-  const { alertsByItem, hasDatedStock } = collectExpirationAlerts(batches, items, batchBalances, today, warningDays)
+  const { alertsByItem, batchExpirationStatuses, hasDatedStock } = collectExpirationAlerts(
+    batches, items, batchBalances, today, warningDays,
+  )
   let expirationUnavailableReason = null
   if (warningDays === null) {
     expirationUnavailableReason = 'warning-period-unset'
@@ -245,16 +259,16 @@ export function summarizeInventory(snapshot, businessDate) {
 
     counts.totalActive += 1
     const quantity = itemBalances.get(id)
-    const alerts = alertsByItem.get(id) ?? new Set()
-    if (quantity === 0) {
+    const alerts = new Set(alertsByItem.get(id))
+    const stockStatus = classifyStock(quantity, item.minimum_stock_level)
+    if (stockStatus === 'out-of-stock') {
       counts.outOfStock += 1
-      alerts.add('out-of-stock')
-    } else if (quantity <= item.minimum_stock_level) {
+    } else if (stockStatus === 'low-stock') {
       counts.lowStock += 1
-      alerts.add('low-stock')
     } else {
       counts.sufficient += 1
     }
+    if (stockStatus !== 'sufficient') alerts.add(stockStatus)
 
     if (alerts.has('expiring-soon')) counts.expiringSoon += 1
     if (alerts.size > 0) {
@@ -268,12 +282,16 @@ export function summarizeInventory(snapshot, businessDate) {
     }
   }
 
+  const movementsNewestFirst = sortMovementHistoryForDisplay(history)
   return {
     counts,
     expirationUnavailableReason,
     attentionItems: attentionItems.sort(compareAttention),
-    recentMovements: recentMovementsFor(history, items),
+    recentMovements: recentMovementsFor(movementsNewestFirst, items),
     itemBalances,
     batchBalances,
+    batchExpirationStatuses,
+    expirationAlertsByItem: alertsByItem,
+    movementsNewestFirst,
   }
 }

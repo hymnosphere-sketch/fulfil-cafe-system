@@ -56,7 +56,7 @@ test('renders real empty inventory separately from unavailable expiration inform
   const { page, results, announcement } = dashboardPage()
   await loadDashboard(page, { scenario: 'empty', renderIcons() {} })
   assert.match(results.innerHTML, /No inventory items yet/)
-  assert.match(results.innerHTML, /Item creation and stock transactions are still in development/)
+  assert.match(results.innerHTML, /Use Inventory to add demo items/)
   assert.match(results.innerHTML, /No active items to summarize/)
   assert.doesNotMatch(results.innerHTML, /dashboard-distribution__segment|NaN%|0%/)
   assert.match(results.innerHTML, /No items require attention/)
@@ -123,4 +123,14 @@ test('a completed mock read cannot render into a page that was left during loadi
   await pending
   assert.equal(results.innerHTML, '')
   assert.equal(results.attributes.size, 0)
+})
+
+test('dashboard uses the balance data when the expiration settings record is absent', async () => {
+  const { page, results } = dashboardPage()
+  const snapshot = await readDemoInventory()
+  delete snapshot.settings
+  await loadDashboard(page, { readSnapshot: async () => snapshot, renderIcons() {} })
+  assert.match(results.innerHTML, /The demo warning period is unset/)
+  assert.match(results.innerHTML, /Share of 12 active items/)
+  assert.doesNotMatch(results.innerHTML, /Could not load demo inventory/)
 })
