@@ -4,8 +4,9 @@ import { renderPageHeader } from '../components/page-header.js'
 import { renderBadge, renderMessage } from '../components/status.js'
 import { readDemoInventory } from '../data/demo-data-provider.js'
 import { demoBusinessDate } from '../data/demo-inventory.js'
+import { routeHref } from '../router.js'
 import { summarizeInventory } from '../services/inventory-summary.js'
-import { formatExpirationWindowEnd, formatQuantity } from '../utils/dashboard-format.js'
+import { formatExpirationWindowEnd, formatQuantity, movementLabels } from '../utils/dashboard-format.js'
 
 const ATTENTION_LIMIT = 5
 const numberFormat = new Intl.NumberFormat('en-PH')
@@ -18,15 +19,6 @@ const alertBadges = {
   expired: { label: 'Expired stock', tone: 'error', icon: 'calendar-clock' },
   'expiring-soon': { label: 'Expiring soon', tone: 'warning', icon: 'calendar-clock' },
 }
-
-const movementLabels = new Map([
-  ['initial_stock', 'Opening stock'],
-  ['stock_in', 'Stock received'],
-  ['stock_out', 'Usage recorded'],
-  ['wastage', 'Waste recorded'],
-  ['positive_adjustment', 'Positive adjustment'],
-  ['negative_adjustment', 'Negative adjustment'],
-])
 
 // Every record field interpolated into markup goes through escaping or number formatting.
 function escapeText(value) {
@@ -150,14 +142,14 @@ function renderQuickActions() {
     id: 'dashboard-quick-actions',
     title: 'Quick actions',
     content: `
-      <p class="cafe-muted cafe-supporting" id="dashboard-actions-note">Stock transactions are unavailable in this preview.</p>
+      <p class="cafe-muted cafe-supporting" id="dashboard-actions-note">Stock movements use fictional data and reset when the page is refreshed.</p>
       <div class="dashboard-quick-actions d-flex flex-wrap gap-2">
-        <button class="btn btn-primary" type="button" aria-describedby="dashboard-actions-note" disabled>
+        <a class="btn btn-primary" href="${routeHref('stock', { workflow: 'receive' })}" aria-describedby="dashboard-actions-note">
           <i data-lucide="package-plus" aria-hidden="true"></i> Receive stock
-        </button>
-        <button class="btn btn-outline-primary" type="button" aria-describedby="dashboard-actions-note" disabled>
+        </a>
+        <a class="btn btn-outline-primary" href="${routeHref('stock', { workflow: 'usage' })}" aria-describedby="dashboard-actions-note">
           <i data-lucide="package-minus" aria-hidden="true"></i> Record usage
-        </button>
+        </a>
       </div>
     `,
   })

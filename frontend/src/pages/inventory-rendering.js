@@ -1,7 +1,8 @@
 import { renderCard } from '../components/card.js'
 import { renderBadge, renderMessage } from '../components/status.js'
+import { routeHref } from '../router.js'
 import { filterAndSortInventory } from '../services/inventory-read-model.js'
-import { formatQuantity } from '../utils/dashboard-format.js'
+import { formatQuantity, movementLabels } from '../utils/dashboard-format.js'
 
 const stockBadges = {
   sufficient: { label: 'Sufficient stock', tone: 'success', icon: 'package' },
@@ -16,14 +17,6 @@ const expirationLabels = {
   'expiring-soon': 'Expiring soon',
   current: 'Outside warning window',
 }
-const movementLabels = new Map([
-  ['initial_stock', 'Opening stock'],
-  ['stock_in', 'Stock received'],
-  ['stock_out', 'Usage recorded'],
-  ['wastage', 'Waste recorded'],
-  ['positive_adjustment', 'Positive adjustment'],
-  ['negative_adjustment', 'Negative adjustment'],
-])
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' })
 const numberFormat = new Intl.NumberFormat('en-PH')
 
@@ -38,6 +31,12 @@ export function renderInventoryAction(action, label, id, { primary = false, subj
   const accessibleLabel = subject === undefined ? '' : ` aria-label="${escapeInventoryText(`${label} ${subject}`)}"`
   const symbol = icon ? `<i data-lucide="${icon}" aria-hidden="true"></i>` : ''
   return `<button class="btn btn-${primary ? 'primary' : 'outline-primary'}" type="button" data-inventory-action="${action}"${record}${accessibleLabel}${disabled ? ' disabled' : ''}>${symbol}${label}</button>`
+}
+
+export function renderReceiveStockLink(item, { identifyItem = false } = {}) {
+  const href = routeHref('stock', { workflow: 'receive', item: item.itemId })
+  const label = identifyItem ? ` aria-label="Receive stock for ${escapeInventoryText(item.name)}"` : ''
+  return `<a class="btn btn-outline-primary" href="${escapeInventoryText(href)}"${label}>Receive stock</a>`
 }
 
 function renderArchiveAction(kind, record) {
@@ -258,6 +257,11 @@ export function renderItemDetails(item, model, fromDuplicate = false) {
           ['Last modified', renderDate(item.updatedAt, formatter)],
         ])}
         ${renderExpirationAlerts(item)}
+        <div class="inventory-actions">
+          ${item.isActive ? renderReceiveStockLink(item) : ''}
+          ${item.isActive && !fromDuplicate ? `<a class="btn btn-outline-primary" href="${escapeInventoryText(routeHref('stock', { workflow: 'usage', item: item.itemId }))}">Record usage</a>` : ''}
+          <a class="btn btn-outline-primary" href="${escapeInventoryText(routeHref('history', { item: item.itemId }))}">View transaction history</a>
+        </div>
       </div>
     </section>
     <div class="inventory-detail-grid">

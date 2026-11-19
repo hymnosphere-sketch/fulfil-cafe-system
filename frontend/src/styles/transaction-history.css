@@ -1,0 +1,112 @@
+.history-workspace {
+  container-type: inline-size;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-workspace :is(.app-page-title, h2[tabindex]) {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.history-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.history-filters > div {
+  min-width: 0;
+}
+
+.history-field-error {
+  color: var(--color-error-text);
+}
+
+.history-table {
+  display: none;
+  --bs-table-bg: transparent;
+  --bs-table-border-color: var(--color-border);
+  --bs-table-color: var(--color-text);
+  font-size: var(--font-size-table);
+  line-height: var(--line-height-table);
+  table-layout: fixed;
+  vertical-align: middle;
+}
+
+.history-table thead {
+  --bs-table-bg: var(--color-background);
+}
+
+.history-table :is(th, td) {
+  padding: var(--space-3) var(--space-2);
+}
+
+.history-table th:nth-child(3) {
+  width: 13%;
+}
+
+.history-table th:nth-child(4) {
+  width: 21%;
+}
+
+.history-table th:last-child {
+  width: 17%;
+}
+
+.history-table tbody tr:last-child > * {
+  border-block-end: 0;
+}
+
+.history-table .btn {
+  max-width: 100%;
+  padding-inline: var(--space-2);
+}
+
+.history-cards,
+.history-allocation-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.history-record {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.history-record-title {
+  margin-block-end: var(--space-3);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-body);
+}
+
+.history-identifier {
+  grid-column: 1 / -1;
+}
+
+.history-reason {
+  white-space: pre-wrap;
+}
+
+@container (min-width: 34rem) {
+  .history-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 54rem) {
+  .history-filters {
+    grid-template-columns: repeat(2, minmax(0, 1.3fr)) repeat(2, minmax(0, 1fr));
+  }
+
+  .history-table {
+    display: table;
+  }
+
+  .history-cards {
+    display: none;
+  }
+}

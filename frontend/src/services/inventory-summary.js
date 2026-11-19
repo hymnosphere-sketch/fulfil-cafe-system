@@ -11,6 +11,10 @@ const MOVEMENT_SIGNS = new Map([
 const ALERT_PRIORITY = ['out-of-stock', 'expired', 'low-stock', 'expiring-soon']
 const MILLISECONDS_PER_DAY = 86_400_000
 
+export function getMovementSign(type) {
+  return MOVEMENT_SIGNS.get(type)
+}
+
 function hasText(value) {
   return typeof value === 'string' && value.trim() !== ''
 }
@@ -32,7 +36,7 @@ function indexRecords(records, idField) {
   return index
 }
 
-function civilDay(value, label) {
+export function civilDay(value, label = 'calendar date') {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new Error('Invalid ' + label)
   }
@@ -46,7 +50,7 @@ function civilDay(value, label) {
   return timestamp / MILLISECONDS_PER_DAY
 }
 
-function movementTimestamp(value) {
+export function movementTimestamp(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(value)) {
     throw new Error('Invalid movement timestamp')
   }
@@ -77,7 +81,7 @@ function updateBalance(balances, id, change, label) {
 function indexHistory(movements, allocations, items, batches) {
   const history = new Map()
   for (const movement of movements.values()) {
-    const sign = MOVEMENT_SIGNS.get(movement.movement_type)
+    const sign = getMovementSign(movement.movement_type)
     if (!items.has(movement.item_id) || !Number.isSafeInteger(movement.quantity_change) ||
       !sign || Math.sign(movement.quantity_change) !== sign) {
       throw new Error('Invalid movement: ' + movement.movement_id)
@@ -87,6 +91,7 @@ function indexHistory(movements, allocations, items, batches) {
       movement,
       timestamp: movementTimestamp(movement.created_at),
       allocations: new Map(),
+      position: history.size,
     })
   }
 
@@ -105,14 +110,16 @@ function indexHistory(movements, allocations, items, batches) {
   return [...history.values()]
 }
 
-function calculateBalances(items, batches, history) {
+function calculateBalances(items, batches, history, sessionStart) {
   const itemBalances = new Map([...items.keys()].map((id) => [id, 0]))
   const batchBalances = new Map()
 
-  // Equal timestamps use fixture order here. Production history needs an authoritative
-  // record order for ties before persisted movements can be replayed safely.
-  const chronological = [...history].sort((left, right) => left.timestamp - right.timestamp)
-  for (const { movement, allocations } of chronological) {
+  // Fixture rows keep stable timestamp order. Session rows follow their append order
+  // after the fixture, including when their clock is behind a prerequisite receipt.
+  // The boundary is demo snapshot metadata. Production needs an authoritative order.
+  const fixture = history.slice(0, sessionStart).sort((left, right) => left.timestamp - right.timestamp)
+  const session = history.slice(sessionStart)
+  for (const { movement, allocations } of [...fixture, ...session]) {
     let allocated = 0
     for (const [batchId, quantity] of allocations) {
       if (!batchBalances.has(batchId) && quantity !== batches.get(batchId).received_quantity) {
@@ -136,7 +143,7 @@ function calculateBalances(items, batches, history) {
   return { itemBalances, batchBalances }
 }
 
-function classifyBatchExpiration(batch, remainingQuantity, today, warningDays) {
+export function classifyBatchExpiration(batch, remainingQuantity, today, warningDays) {
   if (batch.expiration_date == null) return 'undated'
 
   const expirationDay = civilDay(batch.expiration_date, 'batch expiration date')
@@ -177,15 +184,24 @@ function compareAttention(left, right) {
     compareText(left.itemId, right.itemId)
 }
 
-function sortMovementHistoryForDisplay(history) {
+function sortMovementHistoryForDisplay(history, sessionStart) {
   return [...history]
     .sort((left, right) => right.timestamp - left.timestamp ||
-      compareText(left.movement.movement_id, right.movement.movement_id))
-    .map(({ movement }) => ({ ...movement }))
+      (left.position >= sessionStart || right.position >= sessionStart
+        ? right.position - left.position
+        : compareText(left.movement.movement_id, right.movement.movement_id)))
 }
 
-function recentMovementsFor(movements, items) {
-  return movements.slice(0, 5).map((movement) => {
+function recentMovementsFor(history, displayHistory, sessionStart, items) {
+  // Recent on the Dashboard means most recently recorded in this demo, even
+  // during clock rollback. Full Transaction History uses the recorded UTC time.
+  const recent = history.slice(Math.max(sessionStart, history.length - 5)).reverse()
+  for (const entry of displayHistory) {
+    if (recent.length === 5) break
+    if (entry.position < sessionStart) recent.push(entry)
+  }
+
+  return recent.map(({ movement }) => {
     const item = items.get(movement.item_id)
     return {
       movementId: movement.movement_id,
@@ -234,7 +250,11 @@ export function summarizeInventory(snapshot, businessDate) {
   }
 
   const history = indexHistory(movements, allocations, items, batches)
-  const { itemBalances, batchBalances } = calculateBalances(items, batches, history)
+  const sessionStart = snapshot.demoSessionMovementStart ?? history.length
+  if (!Number.isSafeInteger(sessionStart) || sessionStart < 0 || sessionStart > history.length) {
+    throw new Error('Invalid demo session movement boundary')
+  }
+  const { itemBalances, batchBalances } = calculateBalances(items, batches, history, sessionStart)
   const { alertsByItem, batchExpirationStatuses, hasDatedStock } = collectExpirationAlerts(
     batches, items, batchBalances, today, warningDays,
   )
@@ -282,16 +302,16 @@ export function summarizeInventory(snapshot, businessDate) {
     }
   }
 
-  const movementsNewestFirst = sortMovementHistoryForDisplay(history)
+  const displayHistory = sortMovementHistoryForDisplay(history, sessionStart)
   return {
     counts,
     expirationUnavailableReason,
     attentionItems: attentionItems.sort(compareAttention),
-    recentMovements: recentMovementsFor(movementsNewestFirst, items),
+    recentMovements: recentMovementsFor(history, displayHistory, sessionStart, items),
     itemBalances,
     batchBalances,
     batchExpirationStatuses,
     expirationAlertsByItem: alertsByItem,
-    movementsNewestFirst,
+    movementsNewestFirst: displayHistory.map(({ movement }) => ({ ...movement })),
   }
 }

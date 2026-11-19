@@ -8,18 +8,24 @@ export const routes = [
   { id: 'settings', title: 'Settings', icon: 'settings', description: 'Review application preferences and approved synchronization and recovery options.' },
 ]
 
+export function routeHref(id, parameters) {
+  const query = new URLSearchParams(parameters).toString()
+  return '#/' + id + (query ? '?' + query : '')
+}
+
 export function startRouter(renderRoute) {
   function renderCurrentRoute(isInitial = false) {
-    const route = routes.find(({ id }) => location.hash === `#/${id}`) ?? routes[0]
-    const hash = `#/${route.id}`
+    const [path, query] = location.hash.split('?', 2)
+    const route = routes.find(({ id }) => path === routeHref(id))
+    const destination = route ?? routes[0]
 
     // Replace unknown or empty hashes so Back does not revisit an invalid page.
-    if (location.hash !== hash) {
-      history.replaceState(history.state, '', hash)
+    if (!route) {
+      history.replaceState(history.state, '', routeHref(destination.id))
     }
 
-    document.title = `${route.title} | Fulfil Cafe Inventory and Operations Management System`
-    renderRoute(route, isInitial)
+    document.title = `${destination.title} | Fulfil Cafe Inventory and Operations Management System`
+    renderRoute(destination, isInitial, new URLSearchParams(route ? query : undefined))
   }
 
   window.addEventListener('hashchange', () => renderCurrentRoute())

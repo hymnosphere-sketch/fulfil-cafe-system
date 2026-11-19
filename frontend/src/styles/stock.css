@@ -1,0 +1,255 @@
+.stock-workspace {
+  container-type: inline-size;
+  overflow-wrap: anywhere;
+}
+
+.stock-workspace :is(.app-page-title, [data-stock-heading]) {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.stock-stack,
+.stock-fields,
+.stock-flow-grid {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.stock-flow-grid,
+.stock-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.stock-flow-card h3 {
+  font-size: var(--font-size-section-heading);
+}
+
+.stock-flow-icon {
+  display: inline-grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border-radius: var(--radius-control);
+  color: var(--color-primary);
+  background: var(--color-nav-selected);
+}
+
+.stock-flow-icon svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.stock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.stock-actions > .btn {
+  max-width: 100%;
+}
+
+.stock-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.stock-facts dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-supporting);
+  font-weight: var(--font-weight-medium);
+}
+
+.stock-facts dd {
+  margin: 0;
+}
+
+.stock-field-help {
+  display: block;
+  margin-block-start: var(--space-1);
+}
+
+.stock-field {
+  min-width: 0;
+}
+
+.stock-field input[type="date"] {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.stock-balance {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-control);
+  color: var(--color-info-text);
+  background: var(--color-info-bg);
+}
+
+.stock-balance[data-stock-tone="success"] {
+  color: var(--color-success-text);
+  background: var(--color-success-bg);
+}
+
+.stock-balance[data-stock-tone="warning"] {
+  color: var(--color-warning-text);
+  background: var(--color-warning-bg);
+}
+
+.stock-balance[data-stock-tone="error"] {
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+}
+
+.stock-balance .stock-facts dt {
+  color: inherit;
+}
+
+[data-stock-resulting-quantity] {
+  font-size: var(--font-size-section-heading);
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-allocation-progress {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 24rem;
+  font-size: var(--font-size-supporting);
+}
+
+.stock-allocation-progress progress {
+  width: 100%;
+  height: 0.75rem;
+  accent-color: currentColor;
+}
+
+.stock-error {
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  color: var(--color-error-text);
+  background: var(--color-error-bg);
+}
+
+.stock-batch-confirm-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.stock-batch-confirm-list > li,
+.stock-allocation-table tbody tr {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.stock-allocation h3,
+.stock-batch-confirm-list + h3 {
+  font-size: var(--font-size-section-heading);
+}
+
+.stock-allocation-table {
+  width: 100%;
+}
+
+.stock-allocation-table,
+.stock-allocation-table :is(tbody, tr) {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+.stock-allocation-table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.stock-batch-card-label {
+  display: block;
+  margin: 0 0 var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-supporting);
+  font-weight: var(--font-weight-semibold);
+}
+
+.stock-identifier {
+  overflow-wrap: anywhere;
+}
+
+.stock-batch-reference {
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-id-disclosure {
+  font-size: var(--font-size-supporting);
+  font-weight: var(--font-weight-medium);
+}
+
+.stock-id-disclosure summary {
+  width: fit-content;
+  padding-block: var(--space-1);
+  color: var(--color-primary);
+  cursor: pointer;
+}
+
+@container (min-width: 38rem) {
+  .stock-flow-grid,
+  .stock-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-full-width {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (min-width: 54rem) {
+  .stock-allocation-table {
+    display: table;
+    table-layout: fixed;
+    border-collapse: collapse;
+  }
+
+  .stock-allocation-table thead {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+    background: var(--color-background);
+  }
+
+  .stock-allocation-table tbody {
+    display: table-row-group;
+  }
+
+  .stock-allocation-table tr {
+    display: table-row;
+    border: 0;
+  }
+
+  .stock-allocation-table :is(th, td) {
+    padding: var(--space-3);
+    border-block-end: 1px solid var(--color-border);
+    text-align: start;
+    vertical-align: top;
+  }
+
+  .stock-allocation-table th:first-child {
+    width: 24%;
+  }
+
+  .stock-allocation-table .stock-batch-card-label {
+    display: none;
+  }
+}

@@ -1,12 +1,10 @@
 import { summarizeInventory } from '../services/inventory-summary.js'
+import { buildDemoStockCandidate, demoUnits, DemoStockError, validateDemoStockMovement } from '../services/stock-movements.js'
 import { cleanDemoName, findDemoNameMatches, normalizeDemoName, parseDemoMinimumStockLevel } from '../utils/demo-catalog.js'
 import { readDemoInventory } from './demo-data-provider.js'
-import { demoBusinessDate, demoInventory } from './demo-inventory.js'
+import { demoBusinessDate } from './demo-inventory.js'
 
-// Every unit in the fictional fixture uses scale 0. Production unit profiles are pending.
-export const demoUnits = Object.freeze([
-  ...new Set(demoInventory.inventory_items.map((item) => item.unit_of_measurement)),
-].sort())
+export { demoUnits }
 
 const ITEM_FIELDS = ['name', 'category_id', 'unit_of_measurement', 'minimum_stock_level']
 const CATEGORY_FIELDS = ['name', 'description']
@@ -71,13 +69,19 @@ function createBrowserId() {
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-')
 }
 
-function createUniqueId(createId, records, idField) {
+function recordIds(records, idField) {
+  return new Set(records.map((record) => record[idField].toLowerCase()))
+}
+
+function createUniqueId(createId, occupied) {
   const id = createId()
   if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ||
-    records.some((record) => record[idField] === id.toLowerCase())) {
+    occupied.has(id.toLowerCase())) {
     throw new DemoRepositoryError('ID_UNAVAILABLE', 'A unique record identifier could not be created. Try saving again.')
   }
-  return id.toLowerCase()
+  const canonical = id.toLowerCase()
+  occupied.add(canonical)
+  return canonical
 }
 
 function itemMetadata(snapshot, input, existing, allowDuplicate) {
@@ -152,6 +156,10 @@ export function createDemoInventoryRepository({
 } = {}) {
   let snapshot
   let initialization
+  let revision = 0
+  let stockAttemptIds
+  const stockPreviews = new Map()
+  const recordedStockAttempts = new Map()
 
   function initialize() {
     if (!initialization) {
@@ -179,18 +187,73 @@ export function createDemoInventoryRepository({
     summarizeInventory(candidate, demoBusinessDate)
     const savedRecord = structuredClone(record)
     snapshot = candidate
+    revision += 1
     return savedRecord
+  }
+
+  async function previewStockMovement(draft) {
+    await initialize()
+    const plan = validateDemoStockMovement(snapshot, draft, demoBusinessDate)
+    // Keep canceled and stale attempt IDs reserved for this session so an old
+    // confirmation can never refer to a different preview.
+    stockAttemptIds ??= recordIds(snapshot.stock_movements, 'movement_id')
+    const movementId = createUniqueId(createId, stockAttemptIds)
+    const batchId = plan.type === 'stock_in'
+      ? createUniqueId(createId, recordIds(snapshot.stock_batches, 'batch_id'))
+      : null
+    const usedAllocationIds = recordIds(snapshot.batch_allocations, 'allocation_id')
+    const allocationIds = plan.assignments.map(() => createUniqueId(createId, usedAllocationIds))
+    stockPreviews.set(movementId, {
+      draft: structuredClone(draft),
+      revision,
+      identifiers: { movementId, batchId, allocationIds },
+    })
+    return {
+      ...plan,
+      attemptId: movementId,
+      assignments: plan.assignments.map((assignment) =>
+        assignment.isNew ? { ...assignment, batchId } : assignment),
+    }
+  }
+
+  async function recordStockMovement(attemptId) {
+    await initialize()
+    const recorded = recordedStockAttempts.get(attemptId)
+    if (recorded) return { ...structuredClone(recorded), alreadyRecorded: true }
+
+    const preview = stockPreviews.get(attemptId)
+    if (!preview || preview.revision !== revision) {
+      stockPreviews.delete(attemptId)
+      throw new DemoStockError('STALE_PREVIEW', 'The stock review is out of date. Review the movement again before recording it.')
+    }
+    // Validation, clone, and publication run synchronously after initialization.
+    const { candidate, result } = buildDemoStockCandidate(snapshot, preview.draft, {
+      ...preview.identifiers,
+      timestamp: now(),
+      businessDate: demoBusinessDate,
+    })
+    const resultForCaller = structuredClone(result)
+    snapshot = candidate
+    revision += 1
+    stockPreviews.delete(attemptId)
+    recordedStockAttempts.set(attemptId, result)
+    return resultForCaller
   }
 
   return {
     read,
+    previewStockMovement,
+    recordStockMovement,
+    discardStockPreview(attemptId) {
+      stockPreviews.delete(attemptId)
+    },
     createItem(input, { allowDuplicate = false } = {}) {
       return mutate((candidate) => {
         const metadata = itemMetadata(candidate, input, null, allowDuplicate)
         const timestamp = now()
         const item = {
           ...metadata,
-          item_id: createUniqueId(createId, candidate.inventory_items, 'item_id'),
+          item_id: createUniqueId(createId, recordIds(candidate.inventory_items, 'item_id')),
           is_active: true,
           created_at: timestamp,
           updated_at: timestamp,
@@ -224,7 +287,7 @@ export function createDemoInventoryRepository({
         const timestamp = now()
         const category = {
           ...metadata,
-          category_id: createUniqueId(createId, candidate.categories, 'category_id'),
+          category_id: createUniqueId(createId, recordIds(candidate.categories, 'category_id')),
           is_active: true,
           created_at: timestamp,
           updated_at: timestamp,
