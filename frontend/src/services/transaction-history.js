@@ -7,10 +7,8 @@ function businessDayAt(timestamp, formatter) {
   return year * 10_000 + Number(fields.month) * 100 + Number(fields.day)
 }
 
-// Use the same timestamp-based order as item details. Grouping the
-// allocations takes O(a), and joining the m movements to their items takes O(m).
-export function buildTransactionHistory(snapshot) {
-  const { items, itemById, summary, businessTimezone } = buildInventoryReadModel(snapshot)
+// Project timestamp-ordered ledger entries, including their local business day.
+export function projectTransactionMovements({ itemById, summary, businessTimezone }) {
   const formatter = new Intl.DateTimeFormat('en-GB-u-ca-gregory-nu-latn', {
     year: 'numeric',
     month: '2-digit',
@@ -18,6 +16,27 @@ export function buildTransactionHistory(snapshot) {
     era: 'short',
     timeZone: businessTimezone,
   })
+  return summary.movementsNewestFirst.map((movement) => {
+    const item = itemById.get(movement.item_id)
+    return {
+      movementId: movement.movement_id,
+      itemId: item.itemId,
+      name: item.name,
+      categoryId: item.categoryId,
+      categoryName: item.categoryName,
+      isActive: item.isActive,
+      type: movement.movement_type,
+      quantity: movement.quantity_change,
+      unit: item.unit,
+      timestamp: movement.created_at,
+      businessDay: businessDayAt(movement.created_at, formatter),
+      reason: movement.reason,
+    }
+  })
+}
+
+export function buildTransactionHistory(snapshot) {
+  const inventory = buildInventoryReadModel(snapshot)
   const allocationsByMovement = new Map()
   for (const allocation of snapshot.batch_allocations) {
     if (!allocationsByMovement.has(allocation.movement_id)) {
@@ -28,28 +47,14 @@ export function buildTransactionHistory(snapshot) {
       quantity: allocation.quantity_change,
     })
   }
-
-  const movements = summary.movementsNewestFirst.map((movement) => {
-    const item = itemById.get(movement.item_id)
-    return {
-      movementId: movement.movement_id,
-      itemId: item.itemId,
-      name: item.name,
-      categoryName: item.categoryName,
-      isActive: item.isActive,
-      type: movement.movement_type,
-      quantity: movement.quantity_change,
-      unit: item.unit,
-      timestamp: movement.created_at,
-      businessDay: businessDayAt(movement.created_at, formatter),
-      reason: movement.reason,
-      allocations: allocationsByMovement.get(movement.movement_id),
-    }
-  })
+  const movements = projectTransactionMovements(inventory).map((movement) => ({
+    ...movement,
+    allocations: allocationsByMovement.get(movement.movementId),
+  }))
 
   return {
-    items: sortInventoryByName(items),
-    businessTimezone,
+    items: sortInventoryByName(inventory.items),
+    businessTimezone: inventory.businessTimezone,
     movements,
     movementById: new Map(movements.map((movement) => [movement.movementId, movement])),
   }
@@ -77,7 +82,7 @@ export function validateTransactionDateRange({ fromDate = '', toDate = '' } = {}
 // A single pass keeps display order. Numeric calendar dates include the full
 // selected start and end days regardless of the time of each movement.
 export function filterTransactionHistory(movements, {
-  itemId = '', type = '', fromDate = '', toDate = '',
+  itemId = '', categoryId = '', type = '', fromDate = '', toDate = '',
 } = {}) {
   const errors = validateTransactionDateRange({ fromDate, toDate })
   if (Object.keys(errors).length) return { errors, movements: [] }
@@ -88,6 +93,7 @@ export function filterTransactionHistory(movements, {
     errors,
     movements: movements.filter((movement) =>
       (!itemId || movement.itemId === itemId) &&
+      (!categoryId || movement.categoryId === categoryId) &&
       (!type || movement.type === type) &&
       movement.businessDay >= start &&
       movement.businessDay <= end),

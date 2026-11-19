@@ -12,6 +12,7 @@ import './styles/dashboard.css'
 import './styles/inventory.css'
 import './styles/stock.css'
 import './styles/transaction-history.css'
+import './styles/reports.css'
 
 import {
   ArrowLeft,
@@ -44,6 +45,7 @@ import { renderAppLayout } from './layouts/app-layout.js'
 import { loadDashboard, renderDashboard } from './pages/dashboard.js'
 import { createInventoryWorkspace } from './pages/inventory-workspace.js'
 import { renderModulePlaceholder } from './pages/module-placeholder.js'
+import { createReportsWorkspace } from './pages/reports-workspace.js'
 import { createStockWorkspace } from './pages/stock-workspace.js'
 import { createTransactionHistory } from './pages/transaction-history.js'
 import { routes, startRouter } from './router.js'
@@ -66,6 +68,7 @@ function mountApplication(app) {
   const inventoryWorkspace = createInventoryWorkspace({ repository, renderIcons })
   const stockWorkspace = createStockWorkspace({ repository, renderIcons })
   const transactionHistory = createTransactionHistory({ repository, renderIcons })
+  const reportsWorkspace = createReportsWorkspace({ repository, renderIcons })
   const shell = app.querySelector('.app-shell')
   const main = shell.querySelector('main')
   const topbar = shell.querySelector('.app-topbar')
@@ -92,6 +95,8 @@ function mountApplication(app) {
       stockWorkspace.mount(main, { workflow: parameters.get('workflow'), itemId: parameters.get('item') })
     } else if (route.id === 'history') {
       transactionHistory.mount(main, parameters)
+    } else if (route.id === 'reports') {
+      reportsWorkspace.mount(main, parameters)
     } else {
       main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
       renderIcons(main)
