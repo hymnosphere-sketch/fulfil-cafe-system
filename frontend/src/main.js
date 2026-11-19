@@ -8,17 +8,22 @@ import './styles/tokens.css'
 import './styles/base.css'
 import './styles/components.css'
 import './styles/layout.css'
+import './styles/dashboard.css'
 
 import {
   ArrowLeft,
   ArrowLeftRight,
+  CalendarClock,
   ChartColumn,
+  CircleAlert,
   Coffee,
   History,
   Info,
   LayoutDashboard,
   Menu,
   Package,
+  PackageMinus,
+  PackagePlus,
   PanelLeft,
   RefreshCw,
   Settings,
@@ -26,14 +31,13 @@ import {
   TriangleAlert,
   Wifi,
   X,
-  Zap,
   createIcons,
 } from 'lucide'
 
 import { initializeSidebar } from './components/sidebar.js'
 import { initializeConnectivity } from './components/topbar.js'
 import { renderAppLayout } from './layouts/app-layout.js'
-import { renderDashboard } from './pages/dashboard.js'
+import { loadDashboard, renderDashboard } from './pages/dashboard.js'
 import { renderModulePlaceholder } from './pages/module-placeholder.js'
 import { routes, startRouter } from './router.js'
 
@@ -41,8 +45,9 @@ function renderIcons(root) {
   createIcons({
     root,
     icons: {
-      ArrowLeft, ArrowLeftRight, ChartColumn, Coffee, History, Info, LayoutDashboard, Menu,
-      Package, PanelLeft, RefreshCw, Settings, Tags, TriangleAlert, Wifi, X, Zap,
+      ArrowLeft, ArrowLeftRight, CalendarClock, ChartColumn, CircleAlert, Coffee, History, Info,
+      LayoutDashboard, Menu, Package, PackageMinus, PackagePlus, PanelLeft, RefreshCw,
+      Settings, Tags, TriangleAlert, Wifi, X,
     },
   })
 }
@@ -71,6 +76,13 @@ function mountApplication(app) {
     main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
     sidebar.setActiveRoute(route.id)
     renderIcons(main)
+
+    if (route.id === 'dashboard') {
+      const scenario = import.meta.env.DEV
+        ? new URLSearchParams(location.search).get('dashboard-state')
+        : undefined
+      void loadDashboard(main.querySelector('.inventory-dashboard'), { scenario, renderIcons })
+    }
 
     if (!isInitial) sidebar.focusDestination()
   })
