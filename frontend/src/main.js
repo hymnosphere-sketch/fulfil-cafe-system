@@ -10,6 +10,8 @@ import './styles/components.css'
 import './styles/layout.css'
 import './styles/dashboard.css'
 import './styles/inventory.css'
+import './styles/stock.css'
+import './styles/transaction-history.css'
 
 import {
   ArrowLeft,
@@ -42,6 +44,8 @@ import { renderAppLayout } from './layouts/app-layout.js'
 import { loadDashboard, renderDashboard } from './pages/dashboard.js'
 import { createInventoryWorkspace } from './pages/inventory-workspace.js'
 import { renderModulePlaceholder } from './pages/module-placeholder.js'
+import { createStockWorkspace } from './pages/stock-workspace.js'
+import { createTransactionHistory } from './pages/transaction-history.js'
 import { routes, startRouter } from './router.js'
 
 function renderIcons(root) {
@@ -60,6 +64,8 @@ function mountApplication(app) {
 
   const repository = createDemoInventoryRepository()
   const inventoryWorkspace = createInventoryWorkspace({ repository, renderIcons })
+  const stockWorkspace = createStockWorkspace({ repository, renderIcons })
+  const transactionHistory = createTransactionHistory({ repository, renderIcons })
   const shell = app.querySelector('.app-shell')
   const main = shell.querySelector('main')
   const topbar = shell.querySelector('.app-topbar')
@@ -76,12 +82,16 @@ function mountApplication(app) {
 
   initializeConnectivity(topbar)
   renderIcons(shell)
-  startRouter((route, isInitial) => {
+  startRouter((route, isInitial, parameters) => {
     currentPage.textContent = route.title
     sidebar.setActiveRoute(route.id)
 
     if (route.id === 'inventory' || route.id === 'categories') {
-      inventoryWorkspace.mount(main, route.id)
+      inventoryWorkspace.mount(main, route.id, { itemId: parameters.get('item') })
+    } else if (route.id === 'stock') {
+      stockWorkspace.mount(main, { workflow: parameters.get('workflow'), itemId: parameters.get('item') })
+    } else if (route.id === 'history') {
+      transactionHistory.mount(main, parameters)
     } else {
       main.innerHTML = route.id === 'dashboard' ? renderDashboard() : renderModulePlaceholder(route)
       renderIcons(main)

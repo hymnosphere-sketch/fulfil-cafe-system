@@ -1,7 +1,7 @@
 import { renderMessage } from '../components/status.js'
 import { demoUnits } from '../data/demo-inventory-repository.js'
 import { cleanDemoName, findDemoNameMatches, parseDemoMinimumStockLevel } from '../utils/demo-catalog.js'
-import { escapeInventoryText, renderInventoryAction, renderInventoryQuantity, renderOption } from './inventory-rendering.js'
+import { escapeInventoryText, renderInventoryAction, renderInventoryQuantity, renderOption, renderReceiveStockLink } from './inventory-rendering.js'
 
 function isValidCorrection(draft, model, module) {
   const { field } = draft.error
@@ -79,13 +79,16 @@ function renderDuplicateWarning(model, draft) {
 
   return `<section class="inventory-duplicate cafe-tone--warning" aria-labelledby="duplicate-item-title" data-duplicate-warning>
     <h3 id="duplicate-item-title" tabindex="-1">Possible duplicate items</h3>
-    <p>These records have a matching name under demo matching. Review their category, unit, and stock before continuing. Creating an item adds a separate catalog entry. Receiving more stock for an existing item uses a separate workflow that is unavailable in this demo.</p>
+    <p>These records have a matching name under demo matching. Review their category, unit, and stock before continuing. To record a delivery, choose Receive stock on the existing item. Your catalog draft stays open for this session.</p>
     <ul class="inventory-records list-unstyled">${matches.map((item) => `<li class="inventory-record inventory-category-record">
       <div>
         <strong>${escapeInventoryText(item.name)}</strong>
         <p class="cafe-supporting mb-0">${item.isActive ? 'Active' : 'Archived'} · ${escapeInventoryText(item.categoryName)} · ${renderInventoryQuantity(item.availableQuantity, item.unit)} available</p>
       </div>
-      ${renderInventoryAction('inspect-match', 'View existing item', item.itemId, { subject: item.name })}
+      <div class="inventory-actions">
+        ${renderInventoryAction('inspect-match', 'View existing item', item.itemId, { subject: item.name })}
+        ${item.isActive ? renderReceiveStockLink(item, { identifyItem: true }) : ''}
+      </div>
     </li>`).join('')}</ul>
     <div class="inventory-actions">
       ${renderInventoryAction('confirm-duplicate', draft.id ? 'Save item with this name' : 'Save as separate demo item', undefined, { primary: true })}
@@ -102,7 +105,7 @@ export function renderRecordForm({ module, draft, model }) {
   const categoryHelp = 'Demo rules require a distinct category name across active and archived categories. Production matching rules are pending.'
   const itemHelp = item
     ? `Available quantity is read-only: <strong>${renderInventoryQuantity(item.availableQuantity, item.unit)}</strong>. Stock changes require a separate transaction.`
-    : 'A new item starts with zero stock. Use the separate stock receipt workflow when it becomes available.'
+    : 'A new item starts with zero stock. After saving the item, use Receive stock to record a delivery.'
   const fields = isItem
     ? renderItemFields(draft.values, model, draft.error, item)
     : renderFormField({ name: 'name', label: 'Category name', value: draft.values.name, error: draft.error, required: true, help: categoryHelp }) +

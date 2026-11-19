@@ -1,5 +1,6 @@
 import { renderPageHeader } from '../components/page-header.js'
 import { renderMessage } from '../components/status.js'
+import { routeHref } from '../router.js'
 import { buildInventoryReadModel, filterAndSortInventory } from '../services/inventory-read-model.js'
 import { normalizeDemoName } from '../utils/demo-catalog.js'
 import { clearCorrectedFieldError, renderArchiveScreen, renderRecordForm } from './inventory-forms.js'
@@ -87,7 +88,7 @@ export function createInventoryWorkspace({ repository, renderIcons }) {
     }
   }
 
-  function mount(main, module) {
+  function mount(main, module, { itemId } = {}) {
     main.innerHTML = `<div class="inventory-workspace">
       ${renderPageHeader(pages[module])}
       <div class="inventory-stack">
@@ -105,6 +106,8 @@ export function createInventoryWorkspace({ repository, renderIcons }) {
     const isInventory = module === 'inventory'
     let model
     let loadSequence = 0
+    let openLinkedItem = isInventory && Boolean(itemId)
+    let linkedItemUnavailable = false
 
     function focusSection() {
       content.querySelector('[data-inventory-section-title]')?.focus()
@@ -172,7 +175,28 @@ export function createInventoryWorkspace({ repository, renderIcons }) {
         const snapshot = await repository.read()
         if (!root.isConnected || loadSequence !== attempt) return
         model = buildInventoryReadModel(snapshot)
+        if (openLinkedItem) {
+          openLinkedItem = false
+          state.archive = null
+          if (model.itemById.has(itemId)) {
+            const fromDraft = Boolean(state.draft)
+            const sameDetail = state.detail?.id === itemId
+            if (!sameDetail || (fromDraft && !state.detail.fromDuplicate)) {
+              const returnTo = sameDetail ? state.detail : null
+              state.detail = { id: itemId, fromDuplicate: fromDraft, scrollY: 0, returnTo }
+            }
+          } else {
+            state.detail = null
+            linkedItemUnavailable = true
+          }
+        }
         context.innerHTML = renderDemoContext(model, module)
+        if (linkedItemUnavailable) {
+          context.insertAdjacentHTML('beforeend', renderMessage({
+            tone: 'info', icon: 'info', title: 'Item unavailable',
+            message: 'The linked item is unavailable in the current demo session.',
+          }))
+        }
         renderIcons(context)
         renderScreen()
         if (focusHeading) focusSection()
@@ -271,6 +295,7 @@ export function createInventoryWorkspace({ repository, renderIcons }) {
     function closeDetail() {
       const detail = state.detail
       state.detail = detail.returnTo
+      if (detail.id === itemId) history.replaceState(history.state, '', routeHref('inventory'))
       renderScreen()
       const targetAction = detail.fromDuplicate ? 'inspect-match' : 'view-item'
       if (!focusAction(targetAction, detail.id, { preventScroll: true })) focusSection()

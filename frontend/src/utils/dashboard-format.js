@@ -57,3 +57,12 @@ export function formatExpirationWindowEnd(businessDate, warningDays) {
     : dateWithYearFormat
   return formatter.format(end)
 }
+
+export const movementLabels = new Map([
+  ['initial_stock', 'Opening stock'],
+  ['stock_in', 'Stock received'],
+  ['stock_out', 'Usage recorded'],
+  ['wastage', 'Waste recorded'],
+  ['positive_adjustment', 'Positive adjustment'],
+  ['negative_adjustment', 'Negative adjustment'],
+])
