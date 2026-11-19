@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { demoInventory } from '../src/data/demo-inventory.js'
-import { renderHistoryRows, renderTransactionDetail } from '../src/pages/transaction-history.js'
+import { createDemoInventoryRepository } from '../src/data/demo-inventory-repository.js'
+import { renderHistoryList, renderHistoryRows, renderTransactionDetail } from '../src/pages/transaction-history.js'
 import {
   buildTransactionHistory, filterTransactionHistory,
 } from '../src/services/transaction-history.js'
@@ -102,4 +103,55 @@ test('history list and detail escape recorded text, identifiers, and navigation 
   }
   assert.match(details, /movement&amp;&lt;id&gt;&quot;/)
   assert.match(details, /batch&amp;&lt;id&gt;&quot;/)
+})
+
+test('identical History item choices show distinct labels and filter by their full stable IDs', () => {
+  const snapshot = structuredClone(demoInventory)
+  const firstId = demoId(101)
+  const secondId = demoId(102)
+  const first = snapshot.inventory_items.find(({ item_id }) => item_id === firstId)
+  const second = snapshot.inventory_items.find(({ item_id }) => item_id === secondId)
+  second.name = first.name
+  assert.equal(second.category_id, first.category_id)
+  assert.equal(second.unit_of_measurement, first.unit_of_measurement)
+  const model = buildTransactionHistory(snapshot)
+  const filters = { itemId: firstId, type: '', fromDate: '', toDate: '' }
+  const markup = renderHistoryList(model, filters)
+  const options = new Map([...markup.matchAll(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g)]
+    .map(([, value, attributes, label]) => [value, { attributes, label }]))
+  const firstChoice = options.get(firstId)
+  const secondChoice = options.get(secondId)
+  assert.match(firstChoice.label, /^Item \S+ · Single origin beans · Coffee · bags$/)
+  assert.match(secondChoice.label, /^Item \S+ · Single origin beans · Coffee · bags$/)
+  assert.notEqual(firstChoice.label, secondChoice.label)
+  assert.match(firstChoice.attributes, /selected/)
+  assert.doesNotMatch(secondChoice.attributes, /selected/)
+  assert.match(options.get(demoId(113)).label, /Seasonal drink mix · Beverage ingredients · .+ \(archived\)/)
+  for (const itemId of [firstId, secondId]) {
+    const selected = filterTransactionHistory(model.movements, { itemId }).movements
+    assert.deepEqual(selected.map(({ movementId }) => movementId),
+      model.movements.filter((movement) => movement.itemId === itemId).map(({ movementId }) => movementId))
+    assert.ok(selected.length > 0)
+  }
+})
+
+test('catalog renames update History labels without altering original movements and allocations', async () => {
+  const repository = createDemoInventoryRepository()
+  const original = await repository.read()
+  const itemId = demoId(101)
+  const item = original.inventory_items.find(({ item_id }) => item_id === itemId)
+  const before = buildTransactionHistory(original).movementById.get(demoId(356))
+  await repository.updateItem(itemId, {
+    name: 'Fictional house selection',
+    category_id: item.category_id,
+    unit_of_measurement: item.unit_of_measurement,
+    minimum_stock_level: item.minimum_stock_level,
+  })
+  await repository.updateCategory(item.category_id, { name: 'Fictional coffee selection', description: '' })
+  const changed = await repository.read()
+  const after = buildTransactionHistory(changed).movementById.get(demoId(356))
+  assert.deepEqual(after, { ...before, name: 'Fictional house selection', categoryName: 'Fictional coffee selection' })
+  assert.deepEqual(changed.stock_movements, original.stock_movements)
+  assert.deepEqual(changed.batch_allocations, original.batch_allocations)
+  assert.deepEqual(changed.stock_batches, original.stock_batches)
 })

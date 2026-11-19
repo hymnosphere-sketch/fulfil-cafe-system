@@ -4,8 +4,8 @@ import { routeHref } from '../router.js'
 import { filterAndSortInventory } from '../services/inventory-read-model.js'
 import { getDemoBatchEligibility } from '../services/stock-movements.js'
 import { calculateStockPreview } from '../services/stock-preview.js'
+import { catalogItemLabels, shortRecordReferences } from '../utils/catalog-display.js'
 import { movementLabels } from '../utils/dashboard-format.js'
-import { normalizeDemoName } from '../utils/demo-catalog.js'
 import { escapeInventoryText, renderDemoContext, renderInventoryQuantity, renderOption } from './inventory-rendering.js'
 
 export const stockWorkflows = {
@@ -141,26 +141,6 @@ function renderField(draft, field, { id, label, help, options, numeric, multilin
   </div>`
 }
 
-// Use only as many trailing characters as needed for the current set of records.
-export function shortStockReferences(ids) {
-  const unresolved = new Set(ids)
-  const references = new Map()
-  for (let length = 6; unresolved.size > 0; length += 2) {
-    const suffixCounts = new Map()
-    for (const id of unresolved) {
-      const suffix = id.slice(-length)
-      suffixCounts.set(suffix, (suffixCounts.get(suffix) ?? 0) + 1)
-    }
-    for (const id of unresolved) {
-      const suffix = id.slice(-length)
-      if (suffixCounts.get(suffix) !== 1) continue
-      references.set(id, suffix)
-      unresolved.delete(id)
-    }
-  }
-  return references
-}
-
 function renderBatchReference(id, reference) {
   return `<span class="stock-batch-reference">${escape(reference)}</span>
     <details class="stock-id-disclosure">
@@ -171,21 +151,10 @@ function renderBatchReference(id, reference) {
 export function stockItemOptions(model, query, itemId) {
   const matches = filterAndSortInventory(model.items, { query })
   const selected = model.itemById.get(itemId)
-  const groups = new Map()
-  for (const item of model.items) {
-    if (!item.isActive) continue
-    const key = JSON.stringify([normalizeDemoName(item.name), item.categoryId])
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(item.itemId)
-  }
-  const disambiguated = shortStockReferences([...groups.values()].filter((ids) => ids.length > 1).flat())
-  function itemLabel(item) {
-    const reference = disambiguated.get(item.itemId)
-    return `${item.name} · ${item.categoryName} · ${item.unit}${reference ? ' · Item ' + reference : ''}`
-  }
-  const options = matches.map((item) => renderOption(item.itemId, itemLabel(item), itemId))
+  const labels = catalogItemLabels(model.items.filter(({ isActive }) => isActive))
+  const options = matches.map((item) => renderOption(item.itemId, labels.get(item.itemId), itemId))
   if (selected?.isActive && !matches.some((item) => item.itemId === itemId)) {
-    options.unshift(renderOption(itemId, itemLabel(selected) + ' (current selection)', itemId))
+    options.unshift(renderOption(itemId, labels.get(itemId) + ' (current selection)', itemId))
   }
   return {
     markup: `<option value="" disabled${itemId ? '' : ' selected'}>Choose an active item</option>` + options.join(''),
@@ -277,7 +246,7 @@ function renderBatchRow(batch, reference, index, draft, type, item, businessDate
 function renderAllocations(draft, model, item) {
   const type = stockMovementType(draft)
   const error = findError(draft, 'allocations')
-  const references = shortStockReferences((item?.batches ?? []).map(({ batchId }) => batchId))
+  const references = shortRecordReferences((item?.batches ?? []).map(({ batchId }) => batchId))
   let content = '<p class="cafe-muted mb-0">Select an item to view its batches.</p>'
   if (item && !type) content = '<p class="cafe-muted mb-0">Choose an adjustment direction to see eligible batches.</p>'
   if (item && type) content = item.batches.length === 0
@@ -353,7 +322,7 @@ export function renderStockForm(draft, model) {
 
 export function renderStockConfirmation(preview, busy = false, itemBatches = []) {
   const unit = preview.item.unit
-  const references = shortStockReferences([
+  const references = shortRecordReferences([
     ...itemBatches.map(({ batchId }) => batchId),
     ...preview.assignments.map(({ batchId }) => batchId),
   ])

@@ -4,6 +4,7 @@ import { routeHref } from '../router.js'
 import {
   buildTransactionHistory, filterTransactionHistory, validateTransactionDateRange,
 } from '../services/transaction-history.js'
+import { catalogItemLabels } from '../utils/catalog-display.js'
 import { movementLabels } from '../utils/dashboard-format.js'
 import {
   escapeInventoryText as escapeText, renderDemoContext, renderInventoryQuantity, renderOption,
@@ -139,7 +140,9 @@ function renderDateField(name, id, label, value) {
   </div>`
 }
 
-function renderHistoryList(model, filters) {
+export function renderHistoryList(model, filters) {
+  // Lead with the reference so a narrow native select keeps the distinction visible.
+  const labels = catalogItemLabels(model.items, { referenceFirst: true })
   return `
     <section class="card cafe-card" aria-labelledby="history-list-heading">
       <div class="card-body inventory-stack">
@@ -150,8 +153,8 @@ function renderHistoryList(model, filters) {
               <label for="history-item" class="form-label">Inventory item</label>
               <select class="form-select" id="history-item" name="itemId">
                 ${renderOption('', 'All items', filters.itemId)}
-                ${model.items.map(({ itemId, name, isActive }) =>
-                  renderOption(itemId, name + (isActive ? '' : ' (archived)'), filters.itemId)).join('')}
+                ${model.items.map(({ itemId }) =>
+                  renderOption(itemId, labels.get(itemId), filters.itemId)).join('')}
               </select>
             </div>
             <div>

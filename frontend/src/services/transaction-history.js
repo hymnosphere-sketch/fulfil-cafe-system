@@ -7,7 +7,7 @@ function businessDayAt(timestamp, formatter) {
   return year * 10_000 + Number(fields.month) * 100 + Number(fields.day)
 }
 
-// Use the same movement order as the dashboard and item details. Grouping the
+// Use the same timestamp-based order as item details. Grouping the
 // allocations takes O(a), and joining the m movements to their items takes O(m).
 export function buildTransactionHistory(snapshot) {
   const { items, itemById, summary, businessTimezone } = buildInventoryReadModel(snapshot)

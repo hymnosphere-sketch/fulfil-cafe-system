@@ -7,6 +7,11 @@
   margin-block-end: 0;
 }
 
+.inventory-dashboard .app-page-title {
+  width: fit-content;
+  max-width: 100%;
+}
+
 .dashboard-results {
   display: grid;
   gap: var(--grid-gap);

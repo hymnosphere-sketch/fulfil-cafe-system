@@ -5,8 +5,9 @@ import { buildInventoryReadModel } from '../src/services/inventory-read-model.js
 import { calculateStockPreview } from '../src/services/stock-preview.js'
 import {
   renderStockConfirmation, renderStockForm, renderStockSuccess, renderStockTotals,
-  shortStockReferences, stockItemOptions,
+  stockItemOptions,
 } from '../src/pages/stock-rendering.js'
+import { shortRecordReferences as shortStockReferences } from '../src/utils/catalog-display.js'
 
 function createDraft(workflow, itemId, overrides = {}) {
   return {
