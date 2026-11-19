@@ -40,7 +40,7 @@ function createDraft(module, record) {
     values,
     initialValues: { ...values },
     error: null,
-    duplicateIds: [],
+    duplicateReview: null,
     busy: false,
   }
 }
@@ -251,23 +251,23 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       if (!draft || !Object.hasOwn(draft.values, field) || draft.values[field] === value) return
       draft.values[field] = value
       clearCorrectedFieldError(draft, control, model, module)
-      if (draft.duplicateIds.length) {
-        draft.duplicateIds = []
+      if (draft.duplicateReview) {
+        draft.duplicateReview = null
         content.querySelector('[data-duplicate-warning]')?.remove()
         content.querySelector('[type="submit"]').hidden = false
       }
       updateRefreshWarning()
     }
 
-    async function saveForm(allowDuplicate = false) {
+    async function saveForm(confirmDuplicate = false) {
       const draft = state.draft
       if (!draft || draft.busy) return
       const form = content.querySelector('[data-inventory-form]')
       for (const [field, value] of new FormData(form)) updateDraftValue(form.elements.namedItem(field), value)
       const fieldset = form.querySelector('fieldset')
       const submit = fieldset.querySelector('[type="submit"]')
-      if (allowDuplicate !== Boolean(draft.duplicateIds.length)) {
-        if (allowDuplicate) submit.focus()
+      if (confirmDuplicate !== Boolean(draft.duplicateReview)) {
+        if (confirmDuplicate) submit.focus()
         return
       }
       draft.busy = true
@@ -276,8 +276,9 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
 
       try {
         if (isInventory) {
-          if (draft.id) await repository.updateItem(draft.id, draft.values, { allowDuplicate, expected: draft.initialValues })
-          else await repository.createItem(draft.values, { allowDuplicate })
+          const duplicateApproval = draft.duplicateReview?.approval
+          if (draft.id) await repository.updateItem(draft.id, draft.values, { duplicateApproval, expected: draft.initialValues })
+          else await repository.createItem(draft.values, { duplicateApproval })
         } else if (draft.id) {
           await repository.updateCategory(draft.id, draft.values, { expected: draft.initialValues })
         } else {
@@ -285,10 +286,8 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
         }
       } catch (error) {
         draft.busy = false
-        draft.duplicateIds = error?.code === 'POTENTIAL_DUPLICATE_ITEM'
-          ? error.matches.map(({ item_id }) => item_id)
-          : []
-        draft.error = draft.duplicateIds.length ? null : {
+        draft.duplicateReview = error?.duplicateReview ?? null
+        draft.error = draft.duplicateReview ? null : {
           field: error?.field, message: error?.message || 'The local record could not be saved. Review your draft and try again.',
         }
         if (error?.code === 'RECORD_CHANGED') {
@@ -305,7 +304,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
             draft.error = { message: 'This record changed in another tab. Unedited fields now show the latest values. Review your draft before saving again.' }
           } })
           updateRefreshWarning()
-        } else if (draft.duplicateIds.some((id) => !model?.itemById.has(id))) {
+        } else if (draft.duplicateReview?.matches.some(({ itemId }) => !model?.itemById.has(itemId))) {
           await load({ showLoading: false, focusError: true })
         } else {
           renderScreen()

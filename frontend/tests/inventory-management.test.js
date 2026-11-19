@@ -3,6 +3,7 @@ import { test } from 'node:test'
 
 import { readDemoInventory } from '../src/data/demo-data-provider.js'
 import { createDemoInventoryRepository } from '../src/data/demo-inventory-repository.js'
+import { buildDemoCatalogCandidate } from '../src/data/demo-inventory-rules.js'
 import { demoBusinessDate, demoInventory } from '../src/data/demo-inventory.js'
 import {
   buildInventoryReadModel,
@@ -42,6 +43,16 @@ function editableFields(item, overrides = {}) {
 
 async function initialModel() {
   return buildInventoryReadModel(await readDemoInventory())
+}
+
+async function duplicateReview(submit) {
+  let review
+  await assert.rejects(submit, (error) => {
+    assert.equal(error.code, 'POTENTIAL_DUPLICATE_ITEM')
+    review = error.duplicateReview
+    return true
+  })
+  return review
 }
 
 test('the shared session begins with a detached fixture and the approved dashboard totals', async () => {
@@ -175,15 +186,82 @@ test('warns about active and archived item matches and requires explicit permiss
   for (const name of ['  Single ORIGIN beans ', ' SEASONAL DRINK MIX ']) {
     await assert.rejects(repository.createItem(itemInput({ name })), (error) => {
       assert.equal(error.code, 'POTENTIAL_DUPLICATE_ITEM')
-      assert.ok(error.matches.length > 0)
-      assert.ok(error.matches.every(({ item_id }) => item_id))
+      assert.ok(error.duplicateReview.matches.length > 0)
+      assert.ok(error.duplicateReview.matches.every(({ itemId }) => itemId))
       return true
     })
   }
   assert.deepEqual(await repository.read(), before)
-  const item = await repository.createItem(itemInput({ name: 'Single origin beans' }), { allowDuplicate: true })
+  const draft = itemInput({ name: 'Single origin beans' })
+  const review = await duplicateReview(() => repository.createItem(draft))
+  const item = await repository.createItem(draft, { duplicateApproval: review.approval })
   assert.notEqual(item.item_id, demoId(101))
   assert.equal((await repository.read()).inventory_items.length, before.inventory_items.length + 1)
+})
+
+test('duplicate approval is independent of match ordering and is tied to the submitted draft', async () => {
+  const repository = repositoryForTest()
+  const draft = itemInput({ name: 'Single origin beans' })
+  const first = await duplicateReview(() => repository.createItem(draft))
+  await repository.createItem(draft, { duplicateApproval: first.approval })
+  const review = await duplicateReview(() => repository.createItem(draft))
+  assert.equal(review.matches.length, 2)
+  const before = await repository.read()
+  const reordered = { ...before, inventory_items: before.inventory_items.toReversed() }
+  assert.doesNotThrow(() => buildDemoCatalogCandidate(reordered, 'create_item', {
+    input: draft, duplicateApproval: review.approval, createId: () => demoId(20000), now: () => timestamp,
+  }))
+  const changed = itemInput({ ...draft, minimum_stock_level: '3' })
+  const updated = await duplicateReview(() => repository.createItem(changed, { duplicateApproval: review.approval }))
+  assert.equal(updated.updated, true)
+  assert.deepEqual(updated.matches, review.matches)
+  assert.deepEqual(await repository.read(), before)
+})
+
+test('duplicate approval expires when the displayed category, quantity or archived status changes', async () => {
+  const cases = [
+    ['Single origin beans', 'categoryName', 'Coffee reserve', (repo) =>
+      repo.updateCategory(coffeeCategory, { name: 'Coffee reserve' })],
+    ['Single origin beans', 'availableQuantity', 7, async (repo) => {
+      const preview = await repo.previewStockMovement({ itemId: demoId(101), type: 'stock_in', unit: 'bags', scale: 0, quantity: 1 })
+      await repo.recordStockMovement(preview.attemptId)
+    }],
+    ['Paper lids', 'isActive', false, (repo) => repo.archiveItem(demoId(110))],
+  ]
+  for (const [name, field, value, change] of cases) {
+    const repository = repositoryForTest()
+    const draft = itemInput({ name })
+    const first = await duplicateReview(() => repository.createItem(draft))
+    await change(repository)
+    const before = await repository.read()
+    const renewed = await duplicateReview(() => repository.createItem(draft, { duplicateApproval: first.approval }))
+    assert.equal(renewed.updated, true)
+    assert.equal(renewed.matches[0][field], value)
+    assert.notEqual(renewed.approval, first.approval)
+    assert.deepEqual(await repository.read(), before)
+    await repository.createItem(draft, { duplicateApproval: renewed.approval })
+  }
+})
+
+test('duplicate edits require a fresh review when a rename adds or removes matches', async () => {
+  const repository = repositoryForTest()
+  const item = await repository.createItem(itemInput())
+  const another = await repository.createItem(itemInput({ name: 'Another fictional item' }))
+  const draft = itemInput({ name: 'Single origin beans' })
+  const review = await duplicateReview(() => repository.updateItem(item.item_id, draft))
+  const renameReview = await duplicateReview(() => repository.updateItem(another.item_id, draft))
+  await repository.updateItem(another.item_id, draft, { duplicateApproval: renameReview.approval })
+  const renewed = await duplicateReview(() => repository.updateItem(item.item_id, draft, { duplicateApproval: review.approval }))
+  assert.equal(renewed.matches.length, 2)
+  const snapshot = await repository.read()
+  const original = snapshot.inventory_items.find(({ item_id }) => item_id === demoId(101))
+  await repository.updateItem(original.item_id, editableFields(original, { name: 'Original renamed' }))
+  await repository.updateItem(another.item_id, itemInput({ name: 'Other renamed' }))
+  const before = await repository.read()
+  await assert.rejects(repository.updateItem(item.item_id, draft, { duplicateApproval: renewed.approval }),
+    { code: 'DUPLICATE_REVIEW_EXPIRED' })
+  assert.deepEqual(await repository.read(), before)
+  assert.equal((await repository.updateItem(item.item_id, draft)).name, draft.name)
 })
 
 test('edits metadata without replacing identity, creation time, or historical stock records', async () => {

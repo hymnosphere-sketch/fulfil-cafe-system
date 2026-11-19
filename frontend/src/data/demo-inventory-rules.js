@@ -81,7 +81,7 @@ export function createUniqueId(createId, occupied) {
   return canonical
 }
 
-function itemMetadata(snapshot, input, existing, allowDuplicate) {
+function itemMetadata(snapshot, input, existing, duplicateApproval) {
   validateInputFields(input, ITEM_FIELDS)
   const name = requiredName(input.name, 'item')
   if (!snapshot.categories.some((category) => category.category_id === input.category_id && category.is_active)) {
@@ -106,11 +106,29 @@ function itemMetadata(snapshot, input, existing, allowDuplicate) {
     excludeId: existing?.item_id,
     idField: 'item_id',
   })
-  if (matches.length && allowDuplicate !== true) {
-    throw new DemoRepositoryError('POTENTIAL_DUPLICATE_ITEM', 'Review the items with matching names before confirming.', {
-      field: 'name',
-      matches,
-    })
+  if (matches.length) {
+    const { itemBalances } = summarizeInventory(snapshot, demoBusinessDate)
+    const categories = new Map(snapshot.categories.map((category) => [category.category_id, category.name]))
+    const reviewedMatches = matches.map((item) => ({
+      itemId: item.item_id,
+      name: item.name,
+      categoryId: item.category_id,
+      categoryName: categories.get(item.category_id),
+      unit: item.unit_of_measurement,
+      isActive: item.is_active,
+      availableQuantity: itemBalances.get(item.item_id),
+    })).sort((left, right) => left.itemId < right.itemId ? -1 : 1)
+    // The exact rows returned here are the rows the warning displays.
+    const approval = JSON.stringify([existing?.item_id ?? null, ITEM_FIELDS.map((field) => input[field]), reviewedMatches])
+    if (duplicateApproval !== approval) {
+      const updated = duplicateApproval !== undefined
+      throw new DemoRepositoryError('POTENTIAL_DUPLICATE_ITEM', 'Review the items with matching names before confirming.', {
+        field: 'name',
+        duplicateReview: { approval, matches: reviewedMatches, updated },
+      })
+    }
+  } else if (duplicateApproval !== undefined) {
+    throw new DemoRepositoryError('DUPLICATE_REVIEW_EXPIRED', 'The matching items changed. Review your draft and use Save item to submit it.')
   }
 
   return {
@@ -146,8 +164,8 @@ function categoryMetadata(snapshot, input, existing) {
 }
 
 const catalogOperations = {
-  create_item(candidate, { input, allowDuplicate, createId, now }) {
-    const metadata = itemMetadata(candidate, input, null, allowDuplicate)
+  create_item(candidate, { input, duplicateApproval, createId, now }) {
+    const metadata = itemMetadata(candidate, input, null, duplicateApproval)
     const timestamp = now()
     const item = {
       ...metadata,
@@ -159,9 +177,9 @@ const catalogOperations = {
     candidate.inventory_items.push(item)
     return item
   },
-  update_item(candidate, { id, input, allowDuplicate, now }) {
+  update_item(candidate, { id, input, duplicateApproval, now }) {
     const item = findActiveRecord(candidate.inventory_items, 'item_id', id, 'item')
-    const metadata = itemMetadata(candidate, input, item, allowDuplicate)
+    const metadata = itemMetadata(candidate, input, item, duplicateApproval)
     Object.assign(item, metadata, { updated_at: now() })
     return item
   },
@@ -208,7 +226,7 @@ const catalogOperations = {
 export function buildDemoCatalogCandidate(snapshot, operationType, {
   id,
   input,
-  allowDuplicate = false,
+  duplicateApproval,
   createId = createBrowserId,
   now = () => new Date().toISOString(),
 } = {}) {
@@ -216,7 +234,7 @@ export function buildDemoCatalogCandidate(snapshot, operationType, {
     throw new DemoRepositoryError('VALIDATION', 'Choose a supported demo catalog operation.')
   }
   const candidate = structuredClone(snapshot)
-  const record = catalogOperations[operationType](candidate, { id, input, allowDuplicate, createId, now })
+  const record = catalogOperations[operationType](candidate, { id, input, duplicateApproval, createId, now })
   summarizeInventory(candidate, demoBusinessDate)
   return { candidate, record }
 }

@@ -1,7 +1,5 @@
 import { createPersistentInventoryRepository } from '../data/persistent-inventory-repository.js'
-import { demoBusinessDate } from '../data/demo-inventory.js'
 import { InventoryDatabaseError } from '../db/database.js'
-import { summarizeInventory } from './inventory-summary.js'
 
 const mutationMethods = [
   'createItem', 'updateItem', 'archiveItem',
@@ -13,7 +11,7 @@ const mutationMethods = [
 // invalid storage stop the session and require recovery before further writes.
 const closedStorage = new Set([
   'DB_BLOCKED', 'DB_CONNECTION_CLOSED', 'DB_VERSION_CHANGED', 'DB_VERSION_UNSUPPORTED',
-  'DB_UNAVAILABLE', 'DB_INVALID_METADATA', 'DB_INVALID_DATA', 'DB_UNMARKED_DATA',
+  'DB_UNAVAILABLE', 'DB_INVALID_METADATA', 'DB_INTEGRITY', 'DB_UNMARKED_DATA',
 ])
 
 export function createLocalInventorySession({ onUpdate, onCommit }) {
@@ -39,12 +37,7 @@ export function createLocalInventorySession({ onUpdate, onCommit }) {
     publish({ state: 'opening' })
     try {
       if (reopen) await storage.close()
-      const snapshot = await storage.read()
-      try {
-        summarizeInventory(snapshot, demoBusinessDate)
-      } catch (error) {
-        throw new InventoryDatabaseError('DB_INVALID_DATA', 'The saved inventory could not be validated.', error)
-      }
+      await storage.read()
       const status = await storage.readStatus()
       if (current === generation) publish({ state: 'ready', ...status })
     } catch (error) {

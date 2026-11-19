@@ -47,6 +47,11 @@ const failures = {
     kind: 'invalid', tone: 'error', icon: 'circle-alert', label: 'Local data needs review',
     message: 'The app could not verify the stored records. Keep the existing browser data for review.',
   },
+  integrity: {
+    kind: 'invalid', tone: 'error', icon: 'circle-alert', label: 'Local data needs review',
+    message: 'The saved inventory could not be validated. Further recording has stopped. Existing records have been kept for review.',
+    action: 'retry',
+  },
 }
 
 const failuresByCode = new Map([
@@ -62,6 +67,7 @@ const failuresByCode = new Map([
   ['DB_REQUEST_FAILED', failures.transaction],
   ['DB_UPGRADE_FAILED', failures.transaction],
   ['DB_INVALID_METADATA', failures.invalid],
+  ['DB_INTEGRITY', failures.integrity],
   ['DB_UNMARKED_DATA', failures.invalid],
   ['DB_INVALID_RECORD', failures.invalid],
   ['DB_CONSTRAINT', failures.invalid],

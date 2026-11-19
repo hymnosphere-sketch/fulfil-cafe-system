@@ -6,6 +6,7 @@ import { readDemoInventory } from './demo-data-provider.js'
 import { demoBusinessDate } from './demo-inventory.js'
 import { buildDemoCatalogCandidate, buildDemoStockPreview, createBrowserId, DemoRepositoryError } from './demo-inventory-rules.js'
 import { buildDemoQueueRecord, catalogOperation, stockOperation } from './demo-operation-record.js'
+import { invalidLedger, reconstructStoredMovements } from './durable-demo-ledger.js'
 
 const SETTINGS = 'application_settings'
 const QUEUE = 'synchronization_queue'
@@ -13,9 +14,8 @@ const TEST_DATABASE_PREFIX = DEMO_DATABASE_NAME + '-test-'
 const METADATA_KEY = 'demo_repository'
 const EXPIRATION_SETTINGS_KEY = 'expiration_settings'
 const FIXTURE_STORES = ['categories', 'inventory_items', 'stock_batches', 'stock_movements', 'batch_allocations']
-const READ_STORES = [...FIXTURE_STORES, SETTINGS]
-const MUTATION_STORES = [...READ_STORES, QUEUE]
-const INITIALIZATION_STORES = [...MUTATION_STORES, 'staff_users']
+const INVENTORY_STORES = [...FIXTURE_STORES, SETTINGS, QUEUE]
+const INITIALIZATION_STORES = [...INVENTORY_STORES, 'staff_users']
 
 const stalePreview = () => new DemoStockError(
   'STALE_PREVIEW', 'The stock review is out of date. Review the movement again before recording it.',
@@ -71,22 +71,23 @@ async function initialize(database, readFixture) {
   })
 }
 
-async function readSnapshot(transaction) {
-  const [rows, settings] = await Promise.all([
+async function readCommittedInventory(transaction) {
+  const [rows, settings, metadata, queue] = await Promise.all([
     Promise.all(FIXTURE_STORES.map((name) => requestResult(transaction.objectStore(name).getAll()))),
     getSetting(transaction, EXPIRATION_SETTINGS_KEY),
+    getSetting(transaction, METADATA_KEY).then(verifyMetadata),
+    requestResult(transaction.objectStore(QUEUE).getAll()),
   ])
   if (!settings) throw new InventoryDatabaseError('DB_INVALID_METADATA', 'The saved demonstration settings could not be found.')
   const snapshot = Object.fromEntries(FIXTURE_STORES.map((name, index) => [name, rows[index]]))
-  // IndexedDB returns primary-key order. Stock replay needs the fixture prefix and
-  // then the local commit order, even when the device clock moves backward.
-  const movements = snapshot.stock_movements
-  movements.sort((left, right) => left.demo_order - right.demo_order)
-  const sessionStart = movements.findIndex(({ demo_order }) => demo_order > 0)
-  snapshot.stock_movements = movements.map(({ demo_order, ...movement }) => movement)
-  if (sessionStart !== -1) snapshot.demoSessionMovementStart = sessionStart
   snapshot.settings = settings.value
-  return snapshot
+  reconstructStoredMovements(snapshot, queue, metadata.last_sequence)
+  try {
+    summarizeInventory(snapshot, demoBusinessDate)
+  } catch (error) {
+    throw invalidLedger('The saved inventory could not be replayed.', error)
+  }
+  return { snapshot, metadata }
 }
 
 function nextSequence({ last_sequence }) {
@@ -153,7 +154,8 @@ export function createPersistentInventoryRepository({
   }
 
   async function read() {
-    return runTransaction(await getConnection(), READ_STORES, 'readonly', readSnapshot)
+    const { snapshot } = await runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', readCommittedInventory)
+    return snapshot
   }
 
   async function readStatus() {
@@ -163,6 +165,7 @@ export function createPersistentInventoryRepository({
         getSetting(transaction, METADATA_KEY).then(verifyMetadata),
         requestResult(transaction.objectStore(QUEUE).count()),
       ])
+      if (queueCount !== metadata.last_sequence) throw invalidLedger('The saved queue and committed sequence disagree.')
       return { schemaVersion: database.version, queueCount, revision: metadata.last_sequence }
     })
   }
@@ -176,11 +179,8 @@ export function createPersistentInventoryRepository({
   }
 
   async function mutateCatalog(type, args) {
-    return runTransaction(await getConnection(), MUTATION_STORES, 'readwrite', async (transaction) => {
-      const [snapshot, metadata] = await Promise.all([
-        readSnapshot(transaction),
-        getSetting(transaction, METADATA_KEY).then(verifyMetadata),
-      ])
+    return runTransaction(await getConnection(), INVENTORY_STORES, 'readwrite', async (transaction) => {
+      const { snapshot, metadata } = await readCommittedInventory(transaction)
       const category = type.endsWith('_category')
       const store = category ? 'categories' : 'inventory_items'
       if (args.expected) {
@@ -200,13 +200,7 @@ export function createPersistentInventoryRepository({
 
   async function previewStockMovement(draft) {
     const generation = connectionGeneration
-    const { snapshot, metadata } = await runTransaction(await getConnection(), READ_STORES, 'readonly', async (transaction) => {
-      const [snapshot, metadata] = await Promise.all([
-        readSnapshot(transaction),
-        getSetting(transaction, METADATA_KEY).then(verifyMetadata),
-      ])
-      return { snapshot, metadata }
-    })
+    const { snapshot, metadata } = await runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', readCommittedInventory)
     if (generation !== connectionGeneration) throw stalePreview()
     const { preview, result } = buildDemoStockPreview(snapshot, draft, { createId, reservedAttemptIds })
     reservedAttemptIds.add(result.attemptId)
@@ -223,23 +217,29 @@ export function createPersistentInventoryRepository({
     if (typeof attemptId !== 'string' || !attemptId) throw stalePreview()
     const receiptKey = 'demo_stock_attempt:' + attemptId
     try {
-      const result = await runTransaction(await getConnection(), MUTATION_STORES, 'readwrite', async (transaction) => {
-        const receipt = await getSetting(transaction, receiptKey)
+      const result = await runTransaction(await getConnection(), INVENTORY_STORES, 'readwrite', async (transaction) => {
+        const [{ snapshot, metadata }, receipt] = await Promise.all([
+          readCommittedInventory(transaction),
+          getSetting(transaction, receiptKey),
+        ])
         const preview = stockPreviews.get(attemptId)
         if (receipt) {
+          const index = snapshot.stock_movements.findIndex(({ movement_id }) => movement_id === attemptId)
+          if (snapshot.demoSessionMovementStart === undefined || index < snapshot.demoSessionMovementStart ||
+            receipt.result?.movement?.movement_id !== attemptId) {
+            throw invalidLedger('A saved stock confirmation has no matching committed movement.')
+          }
           if (preview && preview.signature !== receipt.signature) throw stalePreview()
           return { ...receipt.result, alreadyRecorded: true }
         }
         if (!preview) throw stalePreview()
-        const metadata = verifyMetadata(await getSetting(transaction, METADATA_KEY))
         if (preview.revision !== metadata.last_sequence) throw stalePreview()
-        const snapshot = await readSnapshot(transaction)
-        if (stockPreviews.get(attemptId) !== preview) throw stalePreview()
-
+        // The next sequence follows every validated movement. The shared
+        // candidate builder appends and replays in that same durable order.
+        const sequence = nextSequence(metadata)
         const { result } = buildDemoStockCandidate(snapshot, preview.draft, {
           ...preview.identifiers, timestamp: now(), businessDate: demoBusinessDate,
         })
-        const sequence = nextSequence(metadata)
         const writes = [
           ['stock_movements', { ...result.movement, demo_order: sequence }],
           ...result.allocations.map((allocation) => ['batch_allocations', allocation]),
@@ -264,11 +264,11 @@ export function createPersistentInventoryRepository({
     previewStockMovement,
     recordStockMovement,
     discardStockPreview(attemptId) { stockPreviews.delete(attemptId) },
-    createItem(input, { allowDuplicate = false } = {}) {
-      return mutateCatalog('create_item', { input, allowDuplicate })
+    createItem(input, { duplicateApproval } = {}) {
+      return mutateCatalog('create_item', { input, duplicateApproval })
     },
-    updateItem(id, input, { allowDuplicate = false, expected } = {}) {
-      return mutateCatalog('update_item', { id, input, allowDuplicate, expected })
+    updateItem(id, input, { duplicateApproval, expected } = {}) {
+      return mutateCatalog('update_item', { id, input, duplicateApproval, expected })
     },
     archiveItem(id, { expected } = {}) { return mutateCatalog('archive_item', { id, expected }) },
     createCategory(input) { return mutateCatalog('create_category', { input }) },

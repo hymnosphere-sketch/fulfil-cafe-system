@@ -85,11 +85,11 @@ export function createDemoInventoryRepository({
     discardStockPreview(attemptId) {
       stockPreviews.delete(attemptId)
     },
-    createItem(input, { allowDuplicate = false } = {}) {
-      return mutate('create_item', { input, allowDuplicate })
+    createItem(input, { duplicateApproval } = {}) {
+      return mutate('create_item', { input, duplicateApproval })
     },
-    updateItem(id, input, { allowDuplicate = false } = {}) {
-      return mutate('update_item', { id, input, allowDuplicate })
+    updateItem(id, input, { duplicateApproval } = {}) {
+      return mutate('update_item', { id, input, duplicateApproval })
     },
     archiveItem(id) {
       return mutate('archive_item', { id })

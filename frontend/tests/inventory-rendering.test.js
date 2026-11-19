@@ -49,7 +49,7 @@ test('category descriptions, form values, and provider-supplied error text are e
     draft: {
       values: { name: untrustedText, description: '</textarea><img src=x onerror=alert(1)>' },
       error: { field: 'name', message: untrustedText },
-      duplicateIds: [],
+      duplicateReview: null,
     },
   })
 
