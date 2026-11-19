@@ -2,6 +2,7 @@ import { routeHref } from '../router.js'
 import { buildInventoryReports } from '../services/inventory-reports.js'
 import { renderDemoContext } from './inventory-rendering.js'
 import {
+  normalizeReportFilters, reportSelectOptions,
   renderReportLoading, renderReportPanel, renderReportReadError, renderReportResults, renderReportsPage,
   reportDefaults, reportTitles,
 } from './report-rendering.js'
@@ -36,11 +37,14 @@ function showDateErrors(form, errors) {
 }
 
 function mountReportPanel(content, view, data, parameters, renderIcons) {
-  const filters = Object.fromEntries(Object.entries(reportDefaults[view]).map(([key, value]) => [
+  const saved = Object.fromEntries(Object.entries(reportDefaults[view]).map(([key, value]) => [
     key, parameters.get(key) ?? value,
   ]))
-  content.innerHTML = renderReportPanel(view, data, filters)
+  const options = reportSelectOptions(view, data.inventory)
+  const initial = normalizeReportFilters(view, saved, options)
+  content.innerHTML = renderReportPanel(view, data, initial.filters, options)
   const form = content.querySelector('[data-report-filters]')
+  const notice = form.querySelector('[data-report-filter-notice]')
   const count = content.querySelector('[data-report-count]')
   const results = content.querySelector('[data-report-results]')
   const summary = results.querySelector('[data-report-summary]')
@@ -59,8 +63,11 @@ function mountReportPanel(content, view, data, parameters, renderIcons) {
     else itemSelect.removeAttribute('aria-describedby')
   }
 
-  function displayResults(selected, applied = false) {
-    const report = renderReportResults(view, data, selected)
+  function displayResults({ filters, cleared }, applied = false) {
+    if (applied && cleared) {
+      for (const name of Object.keys(options)) form.elements.namedItem(name).value = filters[name]
+    }
+    const report = renderReportResults(view, data, filters)
     const errors = report.errors ?? {}
     const firstError = Object.keys(errors)[0]
     showDateErrors(form, errors)
@@ -68,23 +75,28 @@ function mountReportPanel(content, view, data, parameters, renderIcons) {
     summary.hidden = !report.summary
     rows.innerHTML = report.html
     count.textContent = report.count
+    notice.hidden = !cleared
+    notice.textContent = cleared ? 'Unavailable saved filters were cleared.' : ''
     showSelectedItem()
     renderIcons(results)
 
     if (applied && firstError) form.elements.namedItem(firstError).focus()
-    if (applied && !firstError) window.history.replaceState(window.history.state, '', reportURL(view, selected))
+    else if (applied || cleared) {
+      const url = reportURL(view, filters)
+      if (window.location.hash !== url) window.history.replaceState(window.history.state, '', url)
+    }
   }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault()
-    displayResults(readReportFilters(form), true)
+    displayResults(normalizeReportFilters(view, readReportFilters(form), options), true)
   })
   itemSelect?.addEventListener('change', showSelectedItem)
   form.querySelector('[data-report-clear]').addEventListener('click', () => {
     for (const [key, value] of Object.entries(reportDefaults[view])) form.elements.namedItem(key).value = value
-    displayResults(reportDefaults[view], true)
+    displayResults({ filters: reportDefaults[view], cleared: false }, true)
   })
-  displayResults(filters)
+  displayResults(initial)
 }
 
 export function createReportsWorkspace({ repository, renderIcons }) {
@@ -94,6 +106,7 @@ export function createReportsWorkspace({ repository, renderIcons }) {
     main.innerHTML = renderReportsPage(view)
     const root = main.firstElementChild
     const content = root.querySelector('[data-report-content]')
+    const mountedHash = window.location.hash
     renderIcons(root)
 
     async function load() {
@@ -101,7 +114,7 @@ export function createReportsWorkspace({ repository, renderIcons }) {
       content.innerHTML = renderReportLoading()
       try {
         const snapshot = await repository.read()
-        if (!root.isConnected) return
+        if (!root.isConnected || window.location.hash !== mountedHash) return
         const data = buildInventoryReports(snapshot)
         const context = root.querySelector('[data-report-context]')
         context.innerHTML = renderDemoContext(data.inventory, 'inventory')

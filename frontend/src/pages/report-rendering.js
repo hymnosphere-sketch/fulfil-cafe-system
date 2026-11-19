@@ -116,36 +116,65 @@ function reportDateField(name, label, value) {
   </div>`
 }
 
-export function renderReportPanel(view, { inventory }, filters) {
-  const { categories, items, businessTimezone } = inventory
-  const categoryOptions = categories
+export function reportSelectOptions(view, { categories, items }) {
+  const categoryId = [['', 'All categories'], ...categories
     .filter((category) => category.isActive || view === 'movements')
-    .map(({ categoryId, name, isActive }) => [categoryId, name + (isActive ? '' : ' (archived)')])
-  const category = selectFilter('categoryId', 'Category', [['', 'All categories'], ...categoryOptions], filters.categoryId)
+    .map(({ categoryId, name, isActive }) => [categoryId, name + (isActive ? '' : ' (archived)')])]
+  if (view === 'inventory') return {
+    categoryId,
+    stockStatus: [['', 'Any status'], ...Object.entries(stockStatus).map(([key, value]) => [key, value.label])],
+    sort: [
+      ['name-asc', 'Name (A–Z)'], ['name-desc', 'Name (Z–A)'],
+      ['quantity-asc', 'Quantity low–high'], ['quantity-desc', 'Quantity high–low'],
+    ],
+  }
+  if (view === 'restocking') return {
+    categoryId,
+    stockScope: [['', 'Low stock and out of stock'], ['low-only', 'Low stock only']],
+  }
+  if (view === 'expiration') return {
+    categoryId,
+    status: [
+      ['', 'All remaining batches'], ['alerts', 'All expiration alerts'], ['expired', 'Expired'], ['expiring-soon', 'Expiring soon'],
+      ['undated', 'Undated'], ['current', 'Outside warning window'], ['warning-period-unset', 'Warning period unavailable'],
+    ],
+  }
+  const labels = catalogItemLabels(items, { referenceFirst: true })
+  return {
+    itemId: [['', 'All items'], ...items.map(({ itemId }) => [itemId, labels.get(itemId)])],
+    categoryId,
+    type: [['', 'All movement types'], ...movementLabels],
+  }
+}
+
+export function normalizeReportFilters(view, values, options) {
+  const defaults = reportDefaults[view]
+  const filters = { ...defaults, ...values }
+  let cleared = false
+  for (const [name, choices] of Object.entries(options)) {
+    if (choices.some(([key]) => key === filters[name])) continue
+    filters[name] = defaults[name]
+    cleared = true
+  }
+  return { filters, cleared }
+}
+
+export function renderReportPanel(view, { inventory }, filters, options = reportSelectOptions(view, inventory)) {
+  const select = (name, label) => selectFilter(name, label, options[name], filters[name])
+  const category = select('categoryId', 'Category')
   let fields = category
   if (view === 'inventory') {
     fields = `<div>
       <label for="report-query" class="form-label">Search items</label>
       <input class="form-control" type="search" id="report-query" name="query" placeholder="Item name or full ID" value="${escape(filters.query)}">
       </div>${category}
-      ${selectFilter('stockStatus', 'Stock status', [['', 'Any status'], ...Object.entries(stockStatus).map(([key, value]) => [key, value.label])], filters.stockStatus)}
-      ${selectFilter('sort', 'Sort by', [
-        ['name-asc', 'Name (A–Z)'], ['name-desc', 'Name (Z–A)'],
-        ['quantity-asc', 'Quantity low–high'], ['quantity-desc', 'Quantity high–low'],
-      ], filters.sort)}`
+      ${select('stockStatus', 'Stock status')}${select('sort', 'Sort by')}`
   } else if (view === 'restocking') {
-    fields += selectFilter('stockScope', 'Items to include', [['', 'Low stock and out of stock'], ['low-only', 'Low stock only']], filters.stockScope)
+    fields += select('stockScope', 'Items to include')
   } else if (view === 'expiration') {
-    fields += selectFilter('status', 'Expiration status', [
-      ['', 'All remaining batches'], ['alerts', 'All expiration alerts'], ['expired', 'Expired'], ['expiring-soon', 'Expiring soon'],
-      ['undated', 'Undated'], ['current', 'Outside warning window'], ['warning-period-unset', 'Warning period unavailable'],
-    ], filters.status)
+    fields += select('status', 'Expiration status')
   } else {
-    const labels = catalogItemLabels(items, { referenceFirst: true })
-    fields = selectFilter('itemId', 'Inventory item', [
-      ['', 'All items'], ...items.map(({ itemId }) => [itemId, labels.get(itemId)]),
-    ], filters.itemId) + category +
-      selectFilter('type', 'Movement type', [['', 'All movement types'], ...movementLabels], filters.type) +
+    fields = select('itemId', 'Inventory item') + category + select('type', 'Movement type') +
       reportDateField('fromDate', 'From date', filters.fromDate) +
       reportDateField('toDate', 'To date', filters.toDate)
   }
@@ -155,7 +184,8 @@ export function renderReportPanel(view, { inventory }, filters) {
       <form class="report-stack" data-report-filters novalidate aria-label="Filter this report">
         <div class="report-filters${view === 'movements' ? ' report-filters--movements' : ''}">${fields}</div>
         ${view === 'movements' ? `<p id="report-item-selection" class="cafe-muted cafe-supporting mb-0" hidden></p>
-          <p id="report-date-help" class="cafe-muted cafe-supporting mb-0">Dates include both selected days in ${escape(businessTimezone)}. Item and category names reflect the current catalog.</p>` : ''}
+          <p id="report-date-help" class="cafe-muted cafe-supporting mb-0">Dates include both selected days in ${escape(inventory.businessTimezone)}. Item and category names reflect the current catalog.</p>` : ''}
+        <p class="cafe-muted cafe-supporting mb-0" role="status" data-report-filter-notice hidden></p>
         <div class="report-buttons">
           <button type="submit" class="btn btn-primary">Apply filters</button>
           <button type="button" class="btn btn-outline-primary" data-report-clear>Clear filters</button>
@@ -262,10 +292,12 @@ function renderMovements(data, filters, references) {
     const href = routeHref('history', {
       item: group.itemId, type: group.type, ...(filters.fromDate && { from: filters.fromDate }), ...(filters.toDate && { to: filters.toDate }),
     })
+    const movementLabel = movementLabels.get(group.type) ?? 'Stock movement'
+    const historyLabel = `View history for ${group.name} · Item ${references.get(group.itemId)} · ${movementLabel} · ${group.unit} · Transaction History`
     return [itemCell(group, references), escape(group.categoryName), escape(group.unit),
-      movementLabels.get(group.type) ?? 'Stock movement', counts.format(group.movementCount),
+      movementLabel, counts.format(group.movementCount),
       group.quantityChange === null ? 'Unavailable' : renderInventoryQuantity(group.quantityChange, group.unit, true),
-      `<a class="btn btn-outline-primary" href="${escape(href)}" aria-label="View ${escape(group.name)} movements in Transaction History">View history</a>`]
+      `<a class="btn btn-outline-primary" href="${escape(href)}" aria-label="${escape(historyLabel)}">View history</a>`]
   }))
   return {
     count: `Showing ${counts.format(matchingMovements)} of ${formatCount(data.movements.length, 'movement record')} in ${formatCount(groups.length, 'group')}`,

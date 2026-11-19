@@ -4,6 +4,7 @@ import { createDemoInventoryRepository } from '../src/data/demo-inventory-reposi
 import { readDemoInventory } from '../src/data/demo-data-provider.js'
 import { demoInventory } from '../src/data/demo-inventory.js'
 import {
+  normalizeReportFilters, reportSelectOptions,
   renderReportLoading, renderReportPanel, renderReportReadError, renderReportResults, renderReportsPage, reportDefaults,
 } from '../src/pages/report-rendering.js'
 import {
@@ -311,4 +312,140 @@ test('reports render accessible selection, distinct states, safe text and filter
   assert.match(renderReportResults('movements', empty, reportDefaults.movements).html, /No stock movements match/)
   const noAlerts = { ...data, expirationRecords: data.expirationRecords.filter(({ expirationStatus }) => expirationStatus === 'current') }
   assert.match(renderReportResults('expiration', noAlerts, reportDefaults.expiration).html, /No expiration alerts/)
+})
+
+const normalize = (view, data, values) => normalizeReportFilters(view, values, reportSelectOptions(view, data.inventory))
+
+test('a session-created item filter survives while present and falls back to all 22 fixture movements after refresh', async () => {
+  const session = createDemoInventoryRepository()
+  const { item_id: itemId } = await session.createItem({
+    name: 'Session-only cups', category_id: id(4), unit_of_measurement: 'pieces', minimum_stock_level: '5',
+  })
+  const current = buildInventoryReports(await session.read())
+  assert.deepEqual(normalize('movements', current, { itemId }), {
+    filters: { ...reportDefaults.movements, itemId }, cleared: false,
+  })
+  const refreshed = buildInventoryReports(await createDemoInventoryRepository().read())
+  const { filters, cleared } = normalize('movements', refreshed, { itemId })
+  assert.equal(cleared, true)
+  assert.equal(filters.itemId, '')
+  assert.match(renderReportPanel('movements', refreshed, filters), /<option value="" selected>All items<\/option>/)
+  assert.equal(renderReportResults('movements', refreshed, filters).count, 'Showing 22 of 22 movement records in 22 groups')
+})
+
+test('all four reports keep valid categories and clear a session-created category after refresh', async () => {
+  const session = createDemoInventoryRepository()
+  const { category_id: categoryId } = await session.createCategory({ name: 'Session-only category' })
+  const current = buildInventoryReports(await session.read())
+  const refreshed = fixtureReports()
+  for (const view of Object.keys(reportDefaults)) {
+    assert.deepEqual(normalize(view, current, { categoryId }), {
+      filters: { ...reportDefaults[view], categoryId }, cleared: false,
+    })
+    assert.deepEqual(normalize(view, refreshed, { categoryId: id(1) }), {
+      filters: { ...reportDefaults[view], categoryId: id(1) }, cleared: false,
+    })
+    const { filters, cleared } = normalize(view, refreshed, { categoryId })
+    assert.equal(cleared, true)
+    assert.equal(filters.categoryId, '')
+    assert.match(renderReportPanel(view, refreshed, filters), /<option value="" selected>All categories<\/option>/)
+    assert.equal(renderReportResults(view, refreshed, filters).count, renderReportResults(view, refreshed, reportDefaults[view]).count)
+  }
+})
+
+test('archived items and categories stay selectable for historical movements only', async () => {
+  const session = createDemoInventoryRepository()
+  const { category_id: categoryId } = await session.createCategory({ name: 'Archived report fixture' })
+  await session.archiveCategory(categoryId)
+  const data = buildInventoryReports(await session.read())
+  const itemId = id(113)
+  assert.equal(data.inventory.itemById.get(itemId).isActive, false)
+  const { filters, cleared } = normalize('movements', data, { itemId, categoryId })
+  assert.equal(cleared, false)
+  const html = renderReportPanel('movements', data, filters)
+  assert.match(html, new RegExp(`value="${itemId}" selected>[^<]+\\(archived\\)`))
+  assert.ok(html.includes(`value="${categoryId}" selected>Archived report fixture (archived)`))
+  for (const view of ['inventory', 'restocking', 'expiration']) {
+    assert.equal(normalize(view, data, { categoryId }).cleared, true)
+    assert.ok(!reportSelectOptions(view, data.inventory).categoryId.some(([key]) => key === categoryId))
+  }
+})
+
+test('unknown options fall back to defaults while valid zero-result filters are retained', () => {
+  const data = fixtureReports()
+  const unknown = {
+    inventory: { stockStatus: 'bad-status', sort: 'quantity-invalid' },
+    restocking: { stockScope: 'bad-scope' },
+    expiration: { status: 'bad-classification' },
+    movements: { type: 'bad-movement' },
+  }
+  for (const [view, values] of Object.entries(unknown)) {
+    assert.deepEqual(normalize(view, data, values), { filters: reportDefaults[view], cleared: true })
+  }
+  const query = '<no such item & no movement>'
+  const overview = normalize('inventory', data, { query, sort: 'quantity-desc', stockStatus: 'low-stock' })
+  assert.equal(overview.cleared, false)
+  assert.equal(overview.filters.query, query)
+  assert.equal(overview.filters.sort, 'quantity-desc')
+  assert.equal(renderReportResults('inventory', data, overview.filters).count, 'Showing 0 of 12 active items')
+  const values = { itemId: id(101), categoryId: id(4), type: 'stock_in', fromDate: '2026-11-19', toDate: '2026-11-19' }
+  const result = normalize('movements', data, values)
+  assert.deepEqual(result, { filters: values, cleared: false })
+  assert.equal(renderReportResults('movements', data, result.filters).count, 'Showing 0 of 22 movement records')
+})
+
+test('clearing an unavailable option preserves malformed dates and reversed ranges for validation', () => {
+  const data = fixtureReports()
+  for (const [fromDate, toDate, field, error] of [
+    ['2026-02-30', '2026-11-19', 'fromDate', 'Enter a valid start date.'],
+    ['2026-11-20', '2026-11-19', 'toDate', 'Enter an end date on or after the start date.'],
+  ]) {
+    const result = normalize('movements', data, { itemId: 'unavailable', fromDate, toDate })
+    assert.equal(result.cleared, true)
+    assert.equal(result.filters.fromDate, fromDate)
+    assert.equal(result.filters.toDate, toDate)
+    assert.equal(renderReportResults('movements', data, result.filters).errors[field], error)
+  }
+})
+
+test('History link names distinguish movement types and duplicate names with colliding ID suffixes', () => {
+  const snapshot = structuredClone(demoInventory)
+  const otherId = '10000000-0000-4000-8000-000000000101'
+  const name = 'Cups <& "lids">'
+  snapshot.inventory_items.find(({ item_id }) => item_id === id(101)).name = name
+  const other = snapshot.inventory_items.find(({ item_id }) => item_id === id(102))
+  Object.assign(other, { name, item_id: otherId })
+  for (const record of [...snapshot.stock_movements, ...snapshot.stock_batches]) {
+    if (record.item_id === id(102)) record.item_id = otherId
+  }
+  const data = buildInventoryReports(snapshot)
+  const history = buildTransactionHistory(snapshot)
+  const fromDate = '2026-11-01'
+  const toDate = '2026-11-30'
+  const filters = normalize('movements', data, { fromDate, toDate }).filters
+  const html = renderReportResults('movements', data, filters).html.split('</table>')[0]
+  const links = [...html.matchAll(/href="([^"]+)" aria-label="([^"]+)">View history<\/a>/g)]
+  const groupByKey = new Map(movementReport(data, filters).groups.map((group) => [group.itemId + ':' + group.type, group]))
+  const duplicateLabels = []
+  for (const [, href, label] of links) {
+    const params = new URLSearchParams(href.split('?')[1].replaceAll('&amp;', '&'))
+    const itemId = params.get('item')
+    if (![id(101), otherId].includes(itemId)) continue
+    const type = params.get('type')
+    const group = groupByKey.get(itemId + ':' + type)
+    assert.equal(params.get('from'), fromDate)
+    assert.equal(params.get('to'), toDate)
+    const records = filterTransactionHistory(history.movements, { itemId, type, fromDate, toDate }).movements
+    assert.equal(records.length, group.movementCount)
+    assert.equal(records.reduce((sum, { quantity }) => sum + quantity, 0), group.quantityChange)
+    assert.match(label, /View history for Cups &lt;&amp; &quot;lids&quot;&gt; · Item .* · Transaction History$/)
+    duplicateLabels.push({ itemId, type, label })
+  }
+  assert.ok(duplicateLabels.some(({ itemId }) => itemId === otherId))
+  const receipts = duplicateLabels.find(({ itemId, type }) => itemId === id(101) && type === 'stock_in')
+  const usage = duplicateLabels.find(({ itemId, type }) => itemId === id(101) && type === 'stock_out')
+  assert.match(receipts.label, /Stock received/)
+  assert.match(usage.label, /Usage recorded/)
+  assert.equal(new Set(duplicateLabels.map(({ label }) => label)).size, duplicateLabels.length)
+  assert.equal(new Set(duplicateLabels.map(({ label }) => label.split(' · ')[1])).size, 2)
 })
