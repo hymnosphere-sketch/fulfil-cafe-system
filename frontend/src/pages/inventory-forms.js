@@ -1,7 +1,18 @@
 import { renderMessage } from '../components/status.js'
 import { demoUnits } from '../data/demo-inventory-repository.js'
+import { shortRecordReferences } from '../utils/catalog-display.js'
 import { cleanDemoName, findDemoNameMatches, parseDemoMinimumStockLevel } from '../utils/demo-catalog.js'
 import { escapeInventoryText, renderInventoryAction, renderInventoryQuantity, renderOption, renderReceiveStockLink } from './inventory-rendering.js'
+
+export const CREATE_CATEGORY_OPTION = 'create-category'
+
+const matchLabels = {
+  normalized: 'Same normalized name',
+  compact: 'Same name ignoring spaces or selected separators',
+  spelling: 'Similar spelling',
+}
+
+const categoryHelp = 'Demo rules require a distinct category name across active and archived categories. Production matching rules are pending.'
 
 function isValidCorrection(draft, model, module) {
   const { field } = draft.error
@@ -33,8 +44,8 @@ export function clearCorrectedFieldError(draft, control, model, module) {
   control.parentElement.querySelector('[data-field-error]')?.remove()
 }
 
-function renderFormField({ name, label, value, error, help, options, required, disabled, multiline, numeric }) {
-  const id = `demo-field-${name}`
+function renderFormField({ name, label, value, error, help, options, required, disabled, multiline, numeric, prefix = 'demo-field' }) {
+  const id = `${prefix}-${name}`
   const invalid = error?.field === name
   const descriptions = [help && `${id}-help`, invalid && `${id}-error`].filter(Boolean).join(' ')
   const attributes = `id="${id}" name="${name}"${required ? ' required' : ''}${disabled ? ' disabled' : ''}${invalid ? ' aria-invalid="true"' : ''}${descriptions ? ` aria-describedby="${descriptions}"` : ''}`
@@ -58,14 +69,18 @@ function renderFormField({ name, label, value, error, help, options, required, d
   </div>`
 }
 
-function renderItemFields(values, model, error, item) {
+function renderItemFields({ values, error, inlineCategory }, model, item) {
   const availableCategories = model.categories.filter(({ isActive }) => isActive)
-  const categoryOptions = [['', 'Choose an active category'], ...availableCategories.map(({ categoryId, name }) => [categoryId, name])]
+  const categoryOptions = [['', 'Choose an active category'], ...availableCategories.map(({ categoryId, name }) => [categoryId, name]),
+    [CREATE_CATEGORY_OPTION, '+ Create new category']]
+  const selectedName = model.categoryById.get(values.category_id)?.name
   const unitOptions = [['', 'Choose a unit'], ...demoUnits.map((unit) => [unit, unit])]
   return `
     ${renderFormField({ name: 'name', label: 'Item name', value: values.name, error, required: true })}
-    ${renderFormField({ name: 'category_id', label: 'Category', value: values.category_id, error, required: true, options: categoryOptions,
-      help: availableCategories.length ? '' : 'Add an active category in Categories before saving an item.' })}
+    ${renderFormField({ name: 'category_id', label: 'Category', value: inlineCategory ? CREATE_CATEGORY_OPTION : values.category_id,
+      error, required: true, disabled: Boolean(inlineCategory), options: categoryOptions,
+      help: !availableCategories.length ? 'Create a category before saving this item.' :
+        !inlineCategory && selectedName?.length > 32 ? escapeInventoryText(selectedName) : '' })}
     ${renderFormField({ name: 'unit_of_measurement', label: 'Unit of measurement', value: values.unit_of_measurement, error, required: true, options: unitOptions,
       disabled: item?.hasHistory, help: item?.hasHistory ? 'The unit is locked because it applies to existing batch or movement history.' : 'These fictional unit profiles use whole quantities.' })}
     ${renderFormField({ name: 'minimum_stock_level', label: 'Minimum stock level', value: values.minimum_stock_level, error, required: true, numeric: true,
@@ -73,17 +88,39 @@ function renderItemFields(values, model, error, item) {
   `
 }
 
+function renderCategoryFields({ values, error }, prefix) {
+  return renderFormField({ name: 'name', label: 'Category name', value: values.name, error, required: true, help: categoryHelp, prefix }) +
+    renderFormField({ name: 'description', label: 'Description (optional)', value: values.description, error, multiline: true, prefix })
+}
+
+function renderInlineCategory(category) {
+  return `<form class="inventory-inline-category" data-inline-category-form aria-labelledby="inline-category-title" novalidate>
+    <fieldset class="inventory-stack"${category.busy ? ' disabled' : ''}>
+      <h3 id="inline-category-title" class="mb-0">Create new category</h3>
+      <p class="cafe-muted cafe-supporting mb-0">The category stays saved even if you cancel the item.</p>
+      ${category.error && !category.error.field ? `<p class="text-danger mb-0" role="alert" tabindex="-1" data-inline-category-error>${escapeInventoryText(category.error.message)}</p>` : ''}
+      ${renderCategoryFields(category, 'demo-inline-category')}
+      <div class="inventory-actions">
+        <button class="btn btn-primary" type="submit">${category.busy ? 'Creating…' : 'Create category'}</button>
+        <button class="btn btn-outline-primary" type="button" data-inventory-action="cancel-inline-category" aria-label="Cancel category creation">Cancel</button>
+      </div>
+    </fieldset>
+  </form>`
+}
+
 function renderDuplicateWarning(draft) {
   if (!draft.duplicateReview) return ''
   const { matches, updated } = draft.duplicateReview
+  const references = shortRecordReferences(matches.map(({ itemId }) => itemId))
 
   return `<section class="inventory-duplicate cafe-tone--warning" aria-labelledby="duplicate-item-title" data-duplicate-warning>
     <h3 id="duplicate-item-title" tabindex="-1">Possible duplicate items</h3>
     ${updated ? '<p role="status">The matching records changed. Review the updated list before confirming again.</p>' : ''}
-    <p>These records have a matching name under demo matching. Review their category, unit, and stock before continuing. To record a delivery, choose Receive stock on the existing item. You can return to this unsaved draft while this tab stays open.</p>
-    <ul class="inventory-records list-unstyled">${matches.map((item) => `<li class="inventory-record inventory-category-record">
+    <p>These records have matching or similar names under demo rules. Review their category, unit, and stock before continuing. To record a delivery, choose Receive stock on the existing item.</p>
+    <ul class="inventory-records list-unstyled">${matches.map((item) => `<li class="inventory-record inventory-category-record" data-match-reason="${escapeInventoryText(item.reason)}">
       <div>
         <strong>${escapeInventoryText(item.name)}</strong>
+        <p class="cafe-supporting mb-0">${matchLabels[item.reason]} · Item ${escapeInventoryText(references.get(item.itemId))}</p>
         <p class="cafe-supporting mb-0">${item.isActive ? 'Active' : 'Archived'} · ${escapeInventoryText(item.categoryName)} · ${renderInventoryQuantity(item.availableQuantity, item.unit)} available</p>
       </div>
       <div class="inventory-actions">
@@ -103,14 +140,10 @@ export function renderRecordForm({ module, draft, model }) {
   const noun = isItem ? 'item' : 'category'
   const title = `${draft.id ? 'Edit' : 'Add'} ${noun}`
   const item = draft.id && isItem ? model.itemById.get(draft.id) : null
-  const categoryHelp = 'Demo rules require a distinct category name across active and archived categories. Production matching rules are pending.'
   const itemHelp = item
     ? `Available quantity is read-only: <strong>${renderInventoryQuantity(item.availableQuantity, item.unit)}</strong>. Stock changes require a separate transaction.`
     : 'A new item starts with zero stock. After saving the item, use Receive stock to record a delivery.'
-  const fields = isItem
-    ? renderItemFields(draft.values, model, draft.error, item)
-    : renderFormField({ name: 'name', label: 'Category name', value: draft.values.name, error: draft.error, required: true, help: categoryHelp }) +
-      renderFormField({ name: 'description', label: 'Description (optional)', value: draft.values.description, error: draft.error, multiline: true })
+  const fields = isItem ? renderItemFields(draft, model, item) : renderCategoryFields(draft)
 
   return `<section class="card cafe-card inventory-form-panel" aria-labelledby="record-form-title">
     <div class="card-body inventory-stack">
@@ -121,13 +154,15 @@ export function renderRecordForm({ module, draft, model }) {
       <form data-inventory-form novalidate>
         <fieldset class="inventory-stack" ${draft.busy ? 'disabled' : ''}>
           ${isItem ? `<div class="inventory-item-fields">${fields}</div>` : fields}
-          <div class="inventory-actions">
+          ${draft.categoryFeedback ? `<p class="cafe-supporting mb-0" role="status" data-inline-category-feedback>${escapeInventoryText(draft.categoryFeedback)}</p>` : ''}
+          ${draft.inlineCategory ? '' : `<div class="inventory-actions">
             <button class="btn btn-primary" type="submit"${draft.duplicateReview ? ' hidden' : ''}>${draft.busy ? 'Saving…' : `Save ${noun}`}</button>
             ${renderInventoryAction('cancel-form', 'Cancel')}
           </div>
-          ${isItem ? renderDuplicateWarning(draft) : ''}
+          ${isItem ? renderDuplicateWarning(draft) : ''}`}
         </fieldset>
       </form>
+      ${draft.inlineCategory ? renderInlineCategory(draft.inlineCategory) : ''}
     </div>
   </section>`
 }

@@ -3,7 +3,7 @@ import { renderMessage } from '../components/status.js'
 import { routeHref } from '../router.js'
 import { buildInventoryReadModel, filterAndSortInventory } from '../services/inventory-read-model.js'
 import { normalizeDemoName } from '../utils/demo-catalog.js'
-import { clearCorrectedFieldError, renderArchiveScreen, renderRecordForm } from './inventory-forms.js'
+import { CREATE_CATEGORY_OPTION, clearCorrectedFieldError, renderArchiveScreen, renderRecordForm } from './inventory-forms.js'
 import {
   escapeInventoryText,
   renderCategoryList,
@@ -46,7 +46,8 @@ function createDraft(module, record) {
 }
 
 function isDirty(draft) {
-  return draft && Object.keys(draft.values).some((field) => draft.values[field] !== draft.initialValues[field])
+  return draft && (Object.keys(draft.values).some((field) => draft.values[field] !== draft.initialValues[field]) ||
+    Object.values(draft.inlineCategory?.values ?? {}).some(Boolean))
 }
 
 function renderLoading() {
@@ -110,6 +111,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
     let loadSequence = 0
     let openLinkedItem = isInventory && Boolean(itemId)
     let linkedItemUnavailable = false
+    let focusCategoryAfterRead = false
 
     function focusSection() {
       content.querySelector('[data-inventory-section-title]')?.focus()
@@ -210,6 +212,10 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
         afterRead?.()
         renderIcons(context)
         renderScreen()
+        if (focusCategoryAfterRead) {
+          focusCategoryAfterRead = false
+          content.querySelector('#demo-field-category_id')?.focus()
+        }
         if (focusHeading) focusSection()
         if (focusError) focusIssue()
       } catch {
@@ -254,14 +260,64 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       if (draft.duplicateReview) {
         draft.duplicateReview = null
         content.querySelector('[data-duplicate-warning]')?.remove()
-        content.querySelector('[type="submit"]').hidden = false
+        const submit = content.querySelector('[data-inventory-form] [type="submit"]')
+        if (submit) submit.hidden = false
       }
       updateRefreshWarning()
     }
 
+    function openInlineCategory() {
+      const draft = state.draft
+      if (!draft || draft.inlineCategory) return
+      draft.inlineCategory = createDraft('categories')
+      draft.categoryFeedback = ''
+      renderScreen()
+      content.querySelector('#demo-inline-category-name').focus()
+    }
+
+    function closeInlineCategory() {
+      const draft = state.draft
+      if (!draft?.inlineCategory || draft.inlineCategory.busy) return
+      draft.inlineCategory = null
+      updateRefreshWarning()
+      renderScreen()
+      content.querySelector('#demo-field-category_id').focus()
+    }
+
+    async function saveInlineCategory(form) {
+      const draft = state.draft
+      const category = draft?.inlineCategory
+      if (!category || category.busy) return
+      Object.assign(category.values, Object.fromEntries(new FormData(form)))
+      category.busy = true
+      form.querySelector('fieldset').disabled = true
+      form.querySelector('[type="submit"]').textContent = 'Creating…'
+
+      let saved
+      try {
+        saved = await repository.createCategory(category.values)
+      } catch (error) {
+        category.busy = false
+        category.error = { field: error?.field, message: error?.message || 'The category could not be saved. Try again.' }
+        updateRefreshWarning()
+        renderScreen()
+        content.querySelector('[data-inline-category-form] [aria-invalid="true"], [data-inline-category-error]')?.focus()
+        return
+      }
+
+      draft.values.category_id = saved.category_id
+      if (draft.error?.field === 'category_id') draft.error = null
+      draft.duplicateReview = null
+      draft.inlineCategory = null
+      draft.categoryFeedback = `Category saved and selected. ${saved.name}`
+      updateRefreshWarning()
+      focusCategoryAfterRead = true
+      await refreshActiveWorkspace()
+    }
+
     async function saveForm(confirmDuplicate = false) {
       const draft = state.draft
-      if (!draft || draft.busy) return
+      if (!draft || draft.busy || draft.inlineCategory) return
       const form = content.querySelector('[data-inventory-form]')
       for (const [field, value] of new FormData(form)) updateDraftValue(form.elements.namedItem(field), value)
       const fieldset = form.querySelector('fieldset')
@@ -386,6 +442,9 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
         case 'cancel-form':
           closeForm()
           break
+        case 'cancel-inline-category':
+          closeInlineCategory()
+          break
         case 'record-view':
           state.filters.view = id
           renderScreen()
@@ -426,22 +485,34 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       }
     })
 
-    function updateInput({ target }) {
+    function updateInput({ target, type }) {
       const { filter } = target.dataset
       if (filter && state.filters[filter] !== target.value) {
         state.filters[filter] = target.value
         renderResults()
+      } else if (target.name && target.closest('[data-inline-category-form]')) {
+        const category = state.draft?.inlineCategory
+        if (!category || !Object.hasOwn(category.values, target.name)) return
+        category.values[target.name] = target.value
+        clearCorrectedFieldError(category, target, model, 'categories')
+        updateRefreshWarning()
       } else if (target.name && target.closest('[data-inventory-form]')) {
-        updateDraftValue(target, target.value)
+        if (target.name === 'category_id' && type !== 'change') return
+        if (target.name === 'category_id' && target.value === CREATE_CATEGORY_OPTION) openInlineCategory()
+        else updateDraftValue(target, target.value)
       }
     }
 
     root.addEventListener('input', updateInput)
     root.addEventListener('change', updateInput)
     root.addEventListener('submit', (event) => {
-      if (!event.target.matches('[data-inventory-form]')) return
-      event.preventDefault()
-      void saveForm()
+      if (event.target.matches('[data-inline-category-form]')) {
+        event.preventDefault()
+        void saveInlineCategory(event.target)
+      } else if (event.target.matches('[data-inventory-form]')) {
+        event.preventDefault()
+        void saveForm()
+      }
     })
 
     activeMount = { root, content, state, load }
@@ -450,7 +521,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
 
   function refresh() {
     const view = activeMount
-    if (!view?.root.isConnected || view.state.draft?.busy || view.state.archive?.busy) return
+    if (!view?.root.isConnected || view.state.draft?.busy || view.state.draft?.inlineCategory?.busy || view.state.archive?.busy) return
     const focused = document.activeElement
     if (view.content.contains(focused) && focused.matches('input, textarea, select')) return
     return view.load({ showLoading: false })

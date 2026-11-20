@@ -215,6 +215,12 @@ detectDuplicates(draft):
 
 Pin the same released Unicode data version on both sides. Compare normalized strings by Unicode code point and use stable UUID text as the final sort tie-breaker. A normalized match is a warning candidate until agreed category, unit, and identity rules establish a uniqueness conflict. A scan is O(n) record comparisons plus text processing. A tree-index lookup is typically O(log n + k) for k matches, followed by comparisons of those candidates.
 
+#### Frontend demonstration matching
+
+The version-1 frontend keeps its existing NFC, whitespace and lowercase name keys. For warnings only, it tries normalized equality, then equality after ignoring whitespace, ASCII hyphens and underscores, then Levenshtein spelling similarity over Unicode code points. Compact comparison preserves numeric groups and other punctuation. Spelling comparison skips names with numbers, preserves other punctuation and trailing variant tokens such as `S`, `XL` and `large`, and requires both compact names to have at least five characters. If either name has five through seven characters, allow one edit. With both names eight characters or longer, allow up to two edits at a similarity of at least 0.80, calculated as `1 − distance / longer name length`. Warning rows sort by match strength, then item UUID. The draft, edited identity, match reasons and displayed facts are rechecked together in the catalog transaction. Category creation continues to use normalized equality for active and archived names.
+
+For N inventory records with names averaging K code points and a draft of L code points, normalizing and scanning costs O(L + NK). Any eligible spelling comparison costs O(LK) time and O(min(L, K)) working space with two rows. Length, numbers and punctuation skip many comparisons. Sorting R warning rows costs O(R log R), followed by serialization of the draft and displayed values. An exact-name index alone cannot supply all compact or similar candidates. These are provisional warning rules. If the backend later needs the same warnings, pin equivalent normalization and code point behavior in Python and use the same test examples before coordinating a production policy.
+
 ### D. Stock Calculation
 
 **Inputs and outputs.** Signed movements for an item produce its available balance. Signed allocations for a batch produce its remaining balance. Each can be rebuilt to audit cached quantities.
@@ -323,6 +329,8 @@ Use a separate report date filter for movement totals, so past movements still c
 | application_settings | setting_key | Primary key lookup |
 
 An object store holds JavaScript records keyed by a field. The repositories and application services enforce relationships because IndexedDB has no SQL foreign-key enforcement. For synchronization, scan in sequence across pending and failed entries, skipping synchronized entries while maintaining the first unresolved dependency. In a stock write, use one read-write transaction covering the relevant stores, including the local queue and sequence. Acknowledge the UI on transaction completion.
+
+The frontend verifies a saved stock confirmation against its movement, allocations and any batch created by that movement. It reconstructs the before-and-after item balance from the validated movement prefix at the original commit. Verification adds O(M + A + B) time for M movements, A allocations and B batches, apart from the existing durable replay sort, and uses a temporary map for the receipt's allocations. Retry rechecks a receipt already flagged in the current session and keeps the original records for review.
 
 Use explicit schema versions and transactional upgrades for changes to stores or indexes. Check upgrade behavior with saved records and pending operations. Preserve IDs, allocations, history, and queued payloads. Coordinate old tabs and app-shell updates so stale code does not write against a new schema. Keep the queued payload readable across upgrades or migrate it through an approved compatibility procedure that preserves retry identity.
 

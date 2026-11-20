@@ -6,13 +6,14 @@ import { readDemoInventory } from './demo-data-provider.js'
 import { demoBusinessDate } from './demo-inventory.js'
 import { buildDemoCatalogCandidate, buildDemoStockPreview, createBrowserId, DemoRepositoryError } from './demo-inventory-rules.js'
 import { buildDemoQueueRecord, catalogOperation, stockOperation } from './demo-operation-record.js'
-import { invalidLedger, reconstructStoredMovements } from './durable-demo-ledger.js'
+import { invalidLedger, reconstructStoredMovements, verifyStockReceipt } from './durable-demo-ledger.js'
 
 const SETTINGS = 'application_settings'
 const QUEUE = 'synchronization_queue'
 const TEST_DATABASE_PREFIX = DEMO_DATABASE_NAME + '-test-'
 const METADATA_KEY = 'demo_repository'
 const EXPIRATION_SETTINGS_KEY = 'expiration_settings'
+const STOCK_ATTEMPT_PREFIX = 'demo_stock_attempt:'
 const FIXTURE_STORES = ['categories', 'inventory_items', 'stock_batches', 'stock_movements', 'batch_allocations']
 const INVENTORY_STORES = [...FIXTURE_STORES, SETTINGS, QUEUE]
 const INITIALIZATION_STORES = [...INVENTORY_STORES, 'staff_users']
@@ -153,9 +154,15 @@ export function createPersistentInventoryRepository({
     if (database) closeInventoryDatabase(database)
   }
 
-  async function read() {
-    const { snapshot } = await runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', readCommittedInventory)
-    return snapshot
+  async function read({ confirmationAttempt } = {}) {
+    return runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', async (transaction) => {
+      const [{ snapshot }, receipt] = await Promise.all([
+        readCommittedInventory(transaction),
+        confirmationAttempt ? getSetting(transaction, STOCK_ATTEMPT_PREFIX + confirmationAttempt) : undefined,
+      ])
+      if (receipt) verifyStockReceipt(snapshot, confirmationAttempt, receipt.result)
+      return snapshot
+    })
   }
 
   async function readStatus() {
@@ -215,7 +222,7 @@ export function createPersistentInventoryRepository({
 
   async function recordStockMovement(attemptId) {
     if (typeof attemptId !== 'string' || !attemptId) throw stalePreview()
-    const receiptKey = 'demo_stock_attempt:' + attemptId
+    const receiptKey = STOCK_ATTEMPT_PREFIX + attemptId
     try {
       const result = await runTransaction(await getConnection(), INVENTORY_STORES, 'readwrite', async (transaction) => {
         const [{ snapshot, metadata }, receipt] = await Promise.all([
@@ -224,11 +231,7 @@ export function createPersistentInventoryRepository({
         ])
         const preview = stockPreviews.get(attemptId)
         if (receipt) {
-          const index = snapshot.stock_movements.findIndex(({ movement_id }) => movement_id === attemptId)
-          if (snapshot.demoSessionMovementStart === undefined || index < snapshot.demoSessionMovementStart ||
-            receipt.result?.movement?.movement_id !== attemptId) {
-            throw invalidLedger('A saved stock confirmation has no matching committed movement.')
-          }
+          verifyStockReceipt(snapshot, attemptId, receipt.result)
           if (preview && preview.signature !== receipt.signature) throw stalePreview()
           return { ...receipt.result, alreadyRecorded: true }
         }
