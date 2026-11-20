@@ -34,17 +34,35 @@ def now_text(now_fn):
     return canonical_timestamp(now_fn())
 
 
+def _next_commit_seq(session):
+    """Get the next commit sequence number (monotonically increasing)."""
+    from sqlalchemy import func
+    from .models import ProcessedOperation
+    max_seq = session.scalar(select(func.coalesce(func.max(ProcessedOperation.commit_seq), 0)))
+    return max_seq + 1
+
+
 # ------------------------------------------------------------------- views
+def _check_balance_safe(balance, context):
+    from .core.algorithms import MAX_SAFE
+    if balance < -MAX_SAFE or balance > MAX_SAFE:
+        raise ApiError("VALIDATION_ERROR", f"The {context} is outside the supported range.", 422)
+
+
 def item_balance(session, item_id):
     q = select(func.coalesce(func.sum(Movement.quantity_change), 0)).where(
         Movement.item_id == item_id)
-    return int(session.scalar(q))
+    balance = int(session.scalar(q))
+    _check_balance_safe(balance, "item balance")
+    return balance
 
 
 def batch_remaining(session, batch_id):
     q = select(func.coalesce(func.sum(Allocation.quantity_change), 0)).where(
         Allocation.batch_id == batch_id)
-    return int(session.scalar(q))
+    remaining = int(session.scalar(q))
+    _check_balance_safe(remaining, "batch balance")
+    return remaining
 
 
 def category_view(c):
@@ -341,10 +359,12 @@ def process_command(session, now_fn, *, operation_id, operation_type, entity_id,
     created = command["created_at"]
     result = HANDLERS[operation_type](session, command["entity_id"], created, clean)
     processed_at = now_text(now_fn)
+    commit_seq = _next_commit_seq(session)
     session.add(ProcessedOperation(
         operation_id=operation_id, operation_type=operation_type,
         request_fingerprint=fp, fingerprint_profile=PROFILE,
-        processed_at=processed_at, processing_result=json.dumps(result)))
+        processed_at=processed_at, processing_result=json.dumps(result),
+        commit_seq=commit_seq))
     try:
         session.flush()
     except IntegrityError:
@@ -355,4 +375,4 @@ def process_command(session, now_fn, *, operation_id, operation_type, entity_id,
             raise
         return _receipt_response(receipt, fp)
     return {"operation_id": operation_id, "outcome": "accepted",
-            "processed_at": out_ts(processed_at), "result": result}
+            "processed_at": out_ts(processed_at), "result": result, "commit_seq": commit_seq}
