@@ -1,5 +1,5 @@
 import { demoBusinessDate, demoInventory } from '../data/demo-inventory.js'
-import { findDemoNameMatches, normalizeDemoName } from '../utils/demo-catalog.js'
+import { findDemoItemMatches, normalizeDemoName } from '../utils/demo-catalog.js'
 import { classifyStock, summarizeInventory } from './inventory-summary.js'
 
 function compareText(left, right) {
@@ -166,5 +166,6 @@ export function filterAndSortInventory(items, {
 }
 
 export function findPotentialDuplicateItems(items, name, { excludeItemId } = {}) {
-  return sortInventoryByName(findDemoNameMatches(items, name, { excludeId: excludeItemId, idField: 'itemId' }))
+  return findDemoItemMatches(items, name, { excludeId: excludeItemId, idField: 'itemId' })
+    .map(({ record, reason }) => ({ ...record, reason }))
 }

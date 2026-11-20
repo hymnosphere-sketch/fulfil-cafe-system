@@ -19,6 +19,7 @@ export function createLocalInventorySession({ onUpdate, onCommit }) {
   let generation = 0
   let statusRequest = 0
   let refreshRequested = false
+  let confirmationToRecheck
   const storage = createPersistentInventoryRepository({ onConnectionError: fail })
 
   function publish(detail, refreshViews = false) {
@@ -37,9 +38,12 @@ export function createLocalInventorySession({ onUpdate, onCommit }) {
     publish({ state: 'opening' })
     try {
       if (reopen) await storage.close()
-      await storage.read()
+      await storage.read({ confirmationAttempt: confirmationToRecheck })
       const status = await storage.readStatus()
-      if (current === generation) publish({ state: 'ready', ...status })
+      if (current === generation) {
+        confirmationToRecheck = undefined
+        publish({ state: 'ready', ...status })
+      }
     } catch (error) {
       if (current === generation) fail(error)
     }
@@ -70,7 +74,10 @@ export function createLocalInventorySession({ onUpdate, onCommit }) {
       try {
         return await storage[method](...args)
       } catch (error) {
-        if (current === generation && (method === 'read' || closedStorage.has(error.code))) fail(error)
+        if (current === generation && (method === 'read' || closedStorage.has(error.code))) {
+          if (method === 'recordStockMovement' && error.code === 'DB_INTEGRITY') confirmationToRecheck = args[0]
+          fail(error)
+        }
         throw error
       }
     }

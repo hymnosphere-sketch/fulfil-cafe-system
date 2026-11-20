@@ -1,6 +1,6 @@
 import { summarizeInventory } from '../services/inventory-summary.js'
 import { demoUnits, validateDemoStockMovement } from '../services/stock-movements.js'
-import { cleanDemoName, findDemoNameMatches, normalizeDemoName, parseDemoMinimumStockLevel } from '../utils/demo-catalog.js'
+import { cleanDemoName, findDemoItemMatches, findDemoNameMatches, normalizeDemoName, parseDemoMinimumStockLevel } from '../utils/demo-catalog.js'
 import { demoBusinessDate } from './demo-inventory.js'
 
 const ITEM_FIELDS = ['name', 'category_id', 'unit_of_measurement', 'minimum_stock_level']
@@ -102,22 +102,23 @@ function itemMetadata(snapshot, input, existing, duplicateApproval) {
   }
   const threshold = minimumStockLevel(input.minimum_stock_level)
 
-  const matches = findDemoNameMatches(snapshot.inventory_items, name, {
+  const matches = findDemoItemMatches(snapshot.inventory_items, name, {
     excludeId: existing?.item_id,
     idField: 'item_id',
   })
   if (matches.length) {
     const { itemBalances } = summarizeInventory(snapshot, demoBusinessDate)
     const categories = new Map(snapshot.categories.map((category) => [category.category_id, category.name]))
-    const reviewedMatches = matches.map((item) => ({
+    const reviewedMatches = matches.map(({ record: item, reason }) => ({
       itemId: item.item_id,
       name: item.name,
+      reason,
       categoryId: item.category_id,
       categoryName: categories.get(item.category_id),
       unit: item.unit_of_measurement,
       isActive: item.is_active,
       availableQuantity: itemBalances.get(item.item_id),
-    })).sort((left, right) => left.itemId < right.itemId ? -1 : 1)
+    }))
     // The exact rows returned here are the rows the warning displays.
     const approval = JSON.stringify([existing?.item_id ?? null, ITEM_FIELDS.map((field) => input[field]), reviewedMatches])
     if (duplicateApproval !== approval) {

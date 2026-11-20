@@ -31,7 +31,7 @@ function sameFields(actual, expected) {
 function sameRecords(actual, expected, idField) {
   if (!Array.isArray(actual) || actual.length !== expected.length) return false
   const byId = new Map(actual.map((record) => [record?.[idField], record]))
-  return expected.every((record) => sameFields(byId.get(record[idField]), record))
+  return byId.size === actual.length && expected.every((record) => sameFields(byId.get(record[idField]), record))
 }
 
 function matchesStockCommand(command, movement, allocations, batches) {
@@ -81,4 +81,33 @@ export function reconstructStoredMovements(snapshot, queue, lastSequence) {
   moves.sort((left, right) => left.demo_order - right.demo_order)
   snapshot.stock_movements = moves.map(({ demo_order, ...movement }) => movement)
   if (seedCount < moves.length) snapshot.demoSessionMovementStart = seedCount
+}
+
+export function verifyStockReceipt(snapshot, attemptId, result) {
+  const movements = snapshot.stock_movements
+  const index = movements.findIndex(({ movement_id }) => movement_id === attemptId)
+  if (snapshot.demoSessionMovementStart === undefined || index < snapshot.demoSessionMovementStart ||
+    !sameFields(result?.movement, movements[index])) {
+    throw invalidLedger('A saved stock confirmation disagrees with its committed movement.')
+  }
+  const movement = movements[index]
+  const allocations = snapshot.batch_allocations.filter(({ movement_id }) => movement_id === attemptId)
+  if (!sameRecords(result.allocations, allocations, 'allocation_id')) {
+    throw invalidLedger('A saved stock confirmation disagrees with its committed allocations.')
+  }
+  const received = movement.movement_type === 'stock_in'
+  const batch = received ? snapshot.stock_batches.find(({ batch_id }) => batch_id === allocations[0]?.batch_id) : null
+  if (received ? !batch || !sameFields(result.batch, batch) : result.batch !== null) {
+    throw invalidLedger('A saved stock confirmation disagrees with its committed batch.')
+  }
+
+  // Check the balances at this operation in replay order. Later movements
+  // may have changed the current balance. The validated changes are exact.
+  let before = 0n
+  for (let prior = 0; prior < index; prior += 1) {
+    if (movements[prior].item_id === movement.item_id) before += BigInt(movements[prior].quantity_change)
+  }
+  if (result.currentQuantity !== Number(before) || result.resultingQuantity !== Number(before + BigInt(movement.quantity_change))) {
+    throw invalidLedger('A saved stock confirmation disagrees with its historical balances.')
+  }
 }
