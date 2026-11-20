@@ -463,7 +463,285 @@ async function verifyInlineRestart() {
   } finally { await context.dispose() }
 }
 
+// Hold delivery of a real IndexedDB outcome after the native transaction has
+// already settled. Other tabs and fresh reads continue to use committed data.
+async function holdTransactionResult(page, event, mode = 'readwrite') {
+  await page.evaluate(`(() => {
+    const prototype = IDBTransaction.prototype
+    const listen = prototype.addEventListener
+    window.releaseTestTransaction = null
+    prototype.addEventListener = function (type, listener, options) {
+      if (type !== ${quote(event)} || this.mode !== ${quote(mode)} ||
+        !this.objectStoreNames.contains('inventory_items')) return listen.call(this, type, listener, options)
+      prototype.addEventListener = listen
+      return listen.call(this, type, function (result) {
+        window.releaseTestTransaction = () => listener.call(this, result)
+      }, options)
+    }
+  })()`)
+}
+
+async function submitWithHeldResult(page, event) {
+  await holdTransactionResult(page, event)
+  await page.evaluate(`(() => {
+    const button = ${element(createCategory)}
+    button.click()
+    button.click()
+  })()`)
+  await page.until('typeof window.releaseTestTransaction === "function"', 'native write settled before app receives its result')
+}
+
+async function releaseResult(page) {
+  await page.evaluate('new Promise(resolve => { window.releaseTestTransaction(); setTimeout(resolve, 0) })')
+}
+
+async function itemDraftValues(page) {
+  return page.evaluate('[' + ['#demo-field-name', '#demo-field-unit_of_measurement', '#demo-field-minimum_stock_level'].map(value) + ']')
+}
+
+function committedInlineCategory(before, after, name) {
+  assertQueue(after, ['create_category'])
+  assert.equal(after.categories.length, before.categories.length + 1)
+  assert.deepEqual(after.inventory_items, before.inventory_items)
+  const { entity_id, payload } = after.synchronization_queue[0]
+  assert.equal(payload.name, name)
+  assert.equal(after.categories.find(({ category_id }) => category_id === entity_id).name, name)
+  return entity_id
+}
+
+async function archiveInAnotherTab(page, id) {
+  await navigate(page, 'categories')
+  await page.click('[data-inventory-action="archive-category"][data-id=' + quote(id) + ']')
+  await page.click('[data-inventory-action="confirm-archive"]')
+  await page.until(contains('[data-inventory-feedback]', 'category archived'), 'archive committed in second tab')
+}
+
+async function runInlineLifecycle() {
+  if (evidence) await mkdir(evidence, { recursive: true })
+  const status = '[data-inline-category-status]'
+  const error = categoryName + '-error'
+  const unavailable = contains(status, 'no longer available') + ' && ' + value(categorySelect) + ' === ""'
+  const busy = element(categoryForm + ' fieldset[disabled]') + ' && ' + contains(createCategory, 'Creating')
+
+  for (const { label, returns, viewport, screenshot } of [
+    { label: 'without navigation', returns: 0 },
+    { label: 'after returning to Inventory', returns: 1, screenshot: 'desktop' },
+    { label: 'after repeated navigation on mobile', returns: 2, viewport: { width: 390, height: 844 }, screenshot: 'mobile' },
+  ]) {
+    await test('duplicate category failure restores controls and both drafts ' + label, () => withPage(async (page) => {
+      const item = 'Fictional durable trays'
+      await prepareItem(page, item)
+      await openCategory(page, 'Packaging', 'Fictional preserved category draft')
+      const before = await dump(page)
+      await submitWithHeldResult(page, 'abort')
+      assert.deepEqual(await dump(page), before)
+      for (let pass = 0; pass < returns; pass += 1) {
+        await navigate(page, 'dashboard')
+        await page.until(contains('#page-title', 'Dashboard'), 'left Inventory')
+        await navigate(page, 'inventory')
+        await page.until(busy, 'returning form reflects the still-pending operation')
+      }
+      if (screenshot === 'desktop') await capture(page, '01-creating-after-return', categoryForm)
+      await releaseResult(page)
+      await page.until(contains(error, 'different name') + ' && !' + element(categoryForm + ' fieldset[disabled]') +
+        ' && document.activeElement.id === "demo-inline-category-name"', 'error shown and invalid field focused without leaving again')
+      assert.equal(await page.evaluate(element(error) + '.getAttribute("role")'), 'alert')
+      assert.match(await page.evaluate(element(categoryName) + '.getAttribute("aria-describedby")'), /name-error/)
+      assert.equal(await page.evaluate(value(categoryName)), 'Packaging')
+      assert.equal(await page.evaluate(value(description)), 'Fictional preserved category draft')
+      assert.deepEqual(await itemDraftValues(page), [item, 'pieces', '27'])
+      assert.deepEqual(await dump(page), before)
+      if (screenshot === 'desktop') await capture(page, '02-failure-restores-controls', categoryForm)
+      if (screenshot === 'mobile') {
+        assert.equal(await page.evaluate('document.documentElement.scrollWidth <= innerWidth && ' +
+          element(createCategory) + '.getBoundingClientRect().height >= 48'), true)
+        await capture(page, '06-mobile-validation-recovery', categoryForm)
+      }
+    }, viewport))
+  }
+
+  await test('returning Add item receives a committed category with focus and keeps a separate item save', () => withPage(async (page) => {
+    const item = 'Fictional reserve baskets'
+    const category = 'Fictional reserve service'
+    await prepareItem(page, item)
+    await openCategory(page, category)
+    const before = await dump(page)
+    await submitWithHeldResult(page, 'complete')
+    await navigate(page, 'dashboard')
+    await page.until(contains('#page-title', 'Dashboard'), 'dashboard opened')
+    await navigate(page, 'inventory')
+    await page.until(busy, 'pending form remounted')
+    await releaseResult(page)
+    const id = await selectSavedCategory(page, category)
+    assert.equal(await page.evaluate('document.activeElement.id'), 'demo-field-category_id')
+    assert.deepEqual(await itemDraftValues(page), [item, 'pieces', '27'])
+    assert.equal(committedInlineCategory(before, await dump(page), category), id)
+    await capture(page, '03-successful-completion-preserves-draft', itemForm)
+    await page.setField(categorySelect, packaging)
+    assert.equal(await page.evaluate(contains(status, 'saved and selected')), false)
+    assert.equal(await page.evaluate('document.activeElement.id'), 'demo-field-category_id')
+    await capture(page, '04-manual-selection-clears-feedback', itemForm)
+    await page.setField(categorySelect, id)
+    await selectSavedCategory(page, category)
+    await page.click(saveItem)
+    await savedItem(page)
+    const after = await dump(page)
+    assertQueue(after, ['create_category', 'create_item'])
+    assert.equal(after.inventory_items.find(({ name }) => name === item).category_id, id)
+  }))
+
+  await test('returning Edit item keeps newer keyboard focus and text selection after repeated navigation', () => withPage(async (page) => {
+    const initial = await dump(page)
+    const category = 'Fictional tray reserve'
+    await prepareItem(page, 'Fictional chilled cups', cups)
+    await openCategory(page, category)
+    await submitWithHeldResult(page, 'complete')
+    for (const route of ['dashboard', 'categories']) {
+      await navigate(page, route)
+      await page.until('location.hash === ' + quote('#/' + route) + ' && !' + element(categoryForm), 'visited another module')
+      await navigate(page, 'inventory')
+      await page.until(busy, 'pending edit returned')
+    }
+    const item = 'Fictional chilled mugs'
+    await page.setField('#demo-field-name', item)
+    await page.evaluate(`${element('#demo-field-name')}.focus(); ${element('#demo-field-name')}.setSelectionRange(10, 17)`)
+    await releaseResult(page)
+    const id = await selectSavedCategory(page, category)
+    assert.deepEqual(await page.evaluate('[document.activeElement.id, document.activeElement.selectionStart, document.activeElement.selectionEnd]'),
+      ['demo-field-name', 10, 17])
+    assert.deepEqual(await itemDraftValues(page), [item, 'pieces', '27'])
+    assert.equal(committedInlineCategory(initial, await dump(page), category), id)
+    await page.click(saveItem)
+    await savedItem(page)
+    const after = await dump(page)
+    assertQueue(after, ['create_category', 'update_item'])
+    assert.equal(after.inventory_items.find(({ item_id }) => item_id === cups).category_id, id)
+  }))
+
+  await test('an inline save can complete while a separate Categories draft retains its values and focus', () => withPage(async (a, open) => {
+    const b = await open()
+    const category = 'Fictional transit shelf'
+    const initial = await dump(a)
+    await prepareItem(a, 'Fictional transit tongs')
+    await openCategory(a, category)
+    await submitWithHeldResult(a, 'complete')
+    await navigate(a, 'categories')
+    await a.click('[data-inventory-action="add-category"]')
+    await a.setField('#demo-field-name', 'Unrelated category draft')
+    await a.evaluate(element('#demo-field-name') + '.focus()')
+    await b.evaluate(`window.inlineCommit = new Promise(resolve => {
+      const channel = new BroadcastChannel('fulfil-cafe-demo-inventory')
+      channel.addEventListener('message', () => { channel.close(); resolve(true) }, { once: true })
+    }); true`)
+    await releaseResult(a)
+    assert.equal(await b.evaluate('window.inlineCommit'), true)
+    assert.equal(await a.evaluate('location.hash'), '#/categories')
+    assert.equal(await a.evaluate(value('#demo-field-name')), 'Unrelated category draft')
+    assert.equal(await a.evaluate('document.activeElement.id'), 'demo-field-name')
+    assert.equal(await a.evaluate('Boolean(' + element(status) + ')'), false)
+    await navigate(a, 'inventory')
+    const id = await selectSavedCategory(a, category)
+    assert.equal(committedInlineCategory(initial, await dump(a), category), id)
+  }))
+
+  await test('inline completion leaves a linked item detail visible and returns to the updated draft', () => withPage(async (page) => {
+    const category = 'Fictional linked serving shelf'
+    const before = await dump(page)
+    await prepareItem(page, 'Fictional linked serving tools')
+    await openCategory(page, category)
+    await submitWithHeldResult(page, 'complete')
+    await navigate(page, 'inventory?item=' + cups)
+    await page.until(element('#item-details-title'), 'linked detail replaced the form')
+    const back = '[data-inventory-action="back-item"]'
+    await page.evaluate(element(back) + '.focus()')
+    await releaseResult(page)
+    await page.until(element('[data-inventory-content][aria-busy=false]'), 'linked detail settled')
+    assert.equal(await page.evaluate(element('#item-details-title') + '.textContent'), 'Iced cups')
+    assert.equal(await page.evaluate('Boolean(' + element(itemForm) + ')'), false)
+    assert.equal(await page.evaluate('document.activeElement === ' + element(back)), true)
+    await page.click(back)
+    const id = await selectSavedCategory(page, category)
+    assert.equal(committedInlineCategory(before, await dump(page), category), id)
+  }))
+
+  await test('a category archived before acknowledgement is unavailable and another choice recovers the item', () => withPage(async (a, open) => {
+    const b = await open()
+    const category = 'Fictional rotating dry goods'
+    const before = await dump(a)
+    await prepareItem(a, 'Fictional storage platter')
+    await openCategory(a, category)
+    await submitWithHeldResult(a, 'complete')
+    const id = committedInlineCategory(before, await dump(b), category)
+    await archiveInAnotherTab(b, id)
+    await releaseResult(a)
+    await a.until(unavailable, 'archived result explained without claiming selection')
+    assert.deepEqual(await itemDraftValues(a), ['Fictional storage platter', 'pieces', '27'])
+    await capture(a, '05-category-unavailable-at-completion', itemForm)
+    const archived = await dump(a)
+    await a.click(saveItem)
+    await a.until(contains('#demo-field-category_id-error', 'Choose an active category'), 'invalid category cannot be saved')
+    assert.deepEqual(await dump(a), archived)
+    await a.setField(categorySelect, packaging)
+    assert.equal(await a.evaluate(contains(status, 'no longer available')), false)
+    await a.click(saveItem)
+    await savedItem(a)
+    const after = await dump(a)
+    assertQueue(after, ['create_category', 'archive_category', 'create_item'])
+    assert.equal(after.inventory_items.find(({ name }) => name === 'Fictional storage platter').category_id, packaging)
+  }))
+
+  await test('cross-tab archive updates a focused selector and a late older read cannot restore stale feedback', () => withPage(async (a, open) => {
+    const b = await open()
+    const category = 'Fictional seasonal warehouse'
+    await prepareItem(a, 'Fictional seasonal trays')
+    await openCategory(a, category)
+    await a.click(createCategory)
+    const id = await selectSavedCategory(a, category)
+    assert.equal(await a.evaluate('document.activeElement.id'), 'demo-field-category_id')
+    await holdTransactionResult(a, 'complete', 'readonly')
+    await b.evaluate(`(() => {
+      const channel = new BroadcastChannel('fulfil-cafe-demo-inventory')
+      channel.postMessage('inventory-committed')
+      channel.close()
+    })()`)
+    await a.until('typeof window.releaseTestTransaction === "function"', 'read with active category held before rendering')
+    await archiveInAnotherTab(b, id)
+    await a.until(unavailable, 'newer read shows the archived category')
+    await releaseResult(a)
+    assert.equal(await a.evaluate(unavailable), true)
+    assert.equal(await a.evaluate('document.activeElement.id'), 'demo-field-category_id')
+    assert.deepEqual(await itemDraftValues(a), ['Fictional seasonal trays', 'pieces', '27'])
+    assertQueue(await dump(a), ['create_category', 'archive_category'])
+  }))
+
+  await test('storage Retry rechecks a saved category and preserves the draft when it is no longer available', () => withPage(async (a, open) => {
+    const b = await open()
+    const category = 'Fictional replenishment cupboard'
+    await prepareItem(a, 'Fictional reserve teaspoons')
+    await openCategory(a, category)
+    await a.click(createCategory)
+    const id = await selectSavedCategory(a, category)
+    await a.evaluate(`(() => {
+      const transaction = IDBDatabase.prototype.transaction
+      IDBDatabase.prototype.transaction = function (stores, mode, ...options) {
+        if (stores.length === 2 && stores.includes('synchronization_queue')) {
+          IDBDatabase.prototype.transaction = transaction
+          throw new DOMException('Fictional connection closed', 'InvalidStateError')
+        }
+        return transaction.call(this, stores, mode, ...options)
+      }
+    })()`)
+    await archiveInAnotherTab(b, id)
+    await a.until(element('[data-storage-retry]'), 'storage recovery available')
+    await a.click('[data-storage-retry]')
+    await a.until(ready + ' && ' + unavailable, 'Retry uses current category status')
+    assert.deepEqual(await itemDraftValues(a), ['Fictional reserve teaspoons', 'pieces', '27'])
+    assertQueue(await dump(a), ['create_category', 'archive_category'])
+  }))
+}
+
 try {
-  if (phase) await verifyInlineRestart()
+  if (phase === '--lifecycle') await runInlineLifecycle()
+  else if (phase) await verifyInlineRestart()
   else await runFocused()
 } finally { browser.close() }

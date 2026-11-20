@@ -3,7 +3,7 @@ import { renderMessage } from '../components/status.js'
 import { routeHref } from '../router.js'
 import { buildInventoryReadModel, filterAndSortInventory } from '../services/inventory-read-model.js'
 import { normalizeDemoName } from '../utils/demo-catalog.js'
-import { CREATE_CATEGORY_OPTION, clearCorrectedFieldError, renderArchiveScreen, renderRecordForm } from './inventory-forms.js'
+import { CREATE_CATEGORY_OPTION, clearCorrectedFieldError, inlineCategoryFeedback, renderArchiveScreen, renderRecordForm } from './inventory-forms.js'
 import {
   escapeInventoryText,
   renderCategoryList,
@@ -24,6 +24,8 @@ const initialFilters = {
   categories: { view: 'active', query: '' },
 }
 const numberFormat = new Intl.NumberFormat('en-PH')
+const itemCategorySelect = '#demo-field-category_id'
+const inlineCategoryIssue = '[data-inline-category-form] [aria-invalid="true"], [data-inline-category-error]'
 
 function newModuleState(module) {
   return { filters: { ...initialFilters[module] }, detail: null, draft: null, archive: null, feedback: '' }
@@ -111,7 +113,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
     let loadSequence = 0
     let openLinkedItem = isInventory && Boolean(itemId)
     let linkedItemUnavailable = false
-    let focusCategoryAfterRead = false
+    let inlineCategoryCompletion
 
     function focusSection() {
       content.querySelector('[data-inventory-section-title]')?.focus()
@@ -154,15 +156,24 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       renderIcons(feedback)
     }
 
+    function visibleDetail() {
+      if (state.detail?.fromDuplicate || !state.draft) return model?.itemById.get(state.detail?.id)
+    }
+
+    function showsItemDraft(draft) {
+      return isInventory && root.isConnected && draft && draft === state.draft &&
+        !openLinkedItem && !state.archive && !visibleDetail()
+    }
+
     function renderScreen() {
       if (!root.isConnected || !model) return
       renderFeedback()
       const recordById = isInventory ? model.itemById : model.categoryById
       const archiveRecord = recordById.get(state.archive?.id)
-      const detailRecord = model.itemById.get(state.detail?.id)
+      const detailRecord = visibleDetail()
       if (archiveRecord) {
         content.innerHTML = renderArchiveScreen({ module, record: archiveRecord, archive: state.archive })
-      } else if (detailRecord && (state.detail.fromDuplicate || !state.draft)) {
+      } else if (detailRecord) {
         content.innerHTML = renderItemDetails(detailRecord, model, state.detail.fromDuplicate)
       } else if (state.draft) {
         content.innerHTML = renderRecordForm({ module, draft: state.draft, model })
@@ -175,6 +186,52 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
 
     function focusIssue() {
       content.querySelector('[aria-invalid="true"], [data-form-error], #duplicate-item-title, [data-archive-error]')?.focus()
+    }
+
+    function renderPreservingFocus(preferredFocus) {
+      const focused = document.activeElement
+      const focusInContent = content.contains(focused)
+      const fieldId = focusInContent && focused.id
+      const action = focusInContent && focused.dataset.inventoryAction
+      const href = focusInContent && focused.matches('a[href]') ? focused.getAttribute('href') : null
+      const selection = fieldId && typeof focused.selectionStart === 'number'
+        ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null
+      const usePreferred = focused === document.body || focused === root.querySelector('#page-title') ||
+        focused?.closest('[data-inline-category-form]')
+      renderScreen()
+
+      // An item field focused while the transaction or refresh was pending is
+      // a newer interaction. Restore that field and its text selection.
+      const field = fieldId && content.querySelector('#' + CSS.escape(fieldId))
+      if (field && !field.matches(':disabled') && (!preferredFocus || !usePreferred)) {
+        field.focus({ preventScroll: true })
+        if (selection) field.setSelectionRange(...selection)
+      } else if (preferredFocus && usePreferred) {
+        content.querySelector(preferredFocus)?.focus()
+      } else if (action) {
+        focusAction(action, focused.dataset.id, { preventScroll: true })
+      } else if (href) {
+        const link = [...content.querySelectorAll('a[href]')].find((candidate) => candidate.getAttribute('href') === href)
+        link?.focus({ preventScroll: true })
+      }
+    }
+
+    function renderFromRead() {
+      const draft = state.draft
+      const completion = inlineCategoryCompletion
+      inlineCategoryCompletion = undefined
+      if (isInventory && (draft?.inlineCategory || draft?.createdCategoryId)) {
+        const showingDraft = showsItemDraft(draft)
+        if (showingDraft && draft.createdCategoryId && draft.values.category_id === draft.createdCategoryId &&
+          !model.categoryById.get(draft.createdCategoryId)?.isActive) {
+          draft.values.category_id = ''
+          draft.duplicateReview = null
+          updateRefreshWarning()
+        }
+        renderPreservingFocus(showingDraft && completion?.draft === draft ? completion.focus : undefined)
+      } else {
+        renderScreen()
+      }
     }
 
     async function load({ showLoading = true, focusHeading = false, afterRead, focusError = false } = {}) {
@@ -211,11 +268,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
         }
         afterRead?.()
         renderIcons(context)
-        renderScreen()
-        if (focusCategoryAfterRead) {
-          focusCategoryAfterRead = false
-          content.querySelector('#demo-field-category_id')?.focus()
-        }
+        renderFromRead()
         if (focusHeading) focusSection()
         if (focusError) focusIssue()
       } catch {
@@ -257,6 +310,13 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       if (!draft || !Object.hasOwn(draft.values, field) || draft.values[field] === value) return
       draft.values[field] = value
       clearCorrectedFieldError(draft, control, model, module)
+      if (isInventory && field === 'category_id') {
+        const status = content.querySelector('[data-inline-category-status]')
+        const message = inlineCategoryFeedback(draft, model)
+        status.textContent = message
+        status.hidden = !message
+        status.toggleAttribute('data-inline-category-feedback', Boolean(message))
+      }
       if (draft.duplicateReview) {
         draft.duplicateReview = null
         content.querySelector('[data-duplicate-warning]')?.remove()
@@ -270,7 +330,6 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       const draft = state.draft
       if (!draft || draft.inlineCategory) return
       draft.inlineCategory = createDraft('categories')
-      draft.categoryFeedback = ''
       renderScreen()
       content.querySelector('#demo-inline-category-name').focus()
     }
@@ -281,7 +340,18 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       draft.inlineCategory = null
       updateRefreshWarning()
       renderScreen()
-      content.querySelector('#demo-field-category_id').focus()
+      content.querySelector(itemCategorySelect).focus()
+    }
+
+    function completeInlineCategory(draft, saved) {
+      if (!showsItemDraft(draft)) return
+      const focus = saved ? itemCategorySelect : inlineCategoryIssue
+      if (!saved && model) {
+        renderPreservingFocus(focus)
+        return
+      }
+      inlineCategoryCompletion = { draft, focus }
+      if (saved) return load({ showLoading: false })
     }
 
     async function saveInlineCategory(form) {
@@ -297,22 +367,22 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       try {
         saved = await repository.createCategory(category.values)
       } catch (error) {
+        if (state.draft !== draft || draft.inlineCategory !== category) return
         category.busy = false
         category.error = { field: error?.field, message: error?.message || 'The category could not be saved. Try again.' }
         updateRefreshWarning()
-        renderScreen()
-        content.querySelector('[data-inline-category-form] [aria-invalid="true"], [data-inline-category-error]')?.focus()
+        activeMount?.completeInlineCategory(draft, false)
         return
       }
 
+      if (state.draft !== draft || draft.inlineCategory !== category) return
       draft.values.category_id = saved.category_id
       if (draft.error?.field === 'category_id') draft.error = null
       draft.duplicateReview = null
       draft.inlineCategory = null
-      draft.categoryFeedback = `Category saved and selected. ${saved.name}`
+      draft.createdCategoryId = saved.category_id
       updateRefreshWarning()
-      focusCategoryAfterRead = true
-      await refreshActiveWorkspace()
+      await activeMount?.completeInlineCategory(draft, true)
     }
 
     async function saveForm(confirmDuplicate = false) {
@@ -380,6 +450,11 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       const detail = state.detail
       state.detail = detail.returnTo
       if (detail.id === itemId) history.replaceState(history.state, '', routeHref('inventory'))
+      const draft = state.draft
+      if (showsItemDraft(draft) && draft.createdCategoryId && !model.categoryById.has(draft.createdCategoryId)) {
+        void load({ showLoading: false, focusHeading: true })
+        return
+      }
       renderScreen()
       const targetAction = detail.fromDuplicate ? 'inspect-match' : 'view-item'
       if (!focusAction(targetAction, detail.id, { preventScroll: true })) focusSection()
@@ -515,7 +590,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       }
     })
 
-    activeMount = { root, content, state, load }
+    activeMount = { root, content, state, load, showsItemDraft, completeInlineCategory }
     void load()
   }
 
@@ -523,7 +598,9 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
     const view = activeMount
     if (!view?.root.isConnected || view.state.draft?.busy || view.state.draft?.inlineCategory?.busy || view.state.archive?.busy) return
     const focused = document.activeElement
-    if (view.content.contains(focused) && focused.matches('input, textarea, select')) return
+    const draft = view.state.draft
+    const checkCreatedCategory = draft?.createdCategoryId && view.showsItemDraft(draft)
+    if (view.content.contains(focused) && focused.matches('input, textarea, select') && !checkCreatedCategory) return
     return view.load({ showLoading: false })
   }
 

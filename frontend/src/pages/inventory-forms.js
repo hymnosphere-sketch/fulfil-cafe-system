@@ -65,8 +65,20 @@ function renderFormField({ name, label, value, error, help, options, required, d
     <label class="form-label" for="${id}">${label}${required ? ' <span aria-hidden="true">*</span>' : ''}</label>
     ${control}
     ${help ? `<p id="${id}-help" class="cafe-muted cafe-supporting mt-2 mb-0">${help}</p>` : ''}
-    ${invalid ? `<p id="${id}-error" class="invalid-feedback mb-0" data-field-error>${escapeInventoryText(error.message)}</p>` : ''}
+    ${invalid ? `<p id="${id}-error" class="invalid-feedback mb-0" data-field-error${prefix === 'demo-inline-category' ? ' role="alert"' : ''}>${escapeInventoryText(error.message)}</p>` : ''}
   </div>`
+}
+
+export function inlineCategoryFeedback(draft, model) {
+  if (!draft.createdCategoryId || draft.inlineCategory) return ''
+  const category = model.categoryById.get(draft.createdCategoryId)
+  if (category?.isActive && draft.values.category_id === category.categoryId) {
+    return `Category saved and selected. ${category.name}`
+  }
+  if (!category?.isActive && (!draft.values.category_id || draft.values.category_id === draft.createdCategoryId)) {
+    return 'The category you created is no longer available. Choose an active category.'
+  }
+  return ''
 }
 
 function renderItemFields({ values, error, inlineCategory }, model, item) {
@@ -144,6 +156,7 @@ export function renderRecordForm({ module, draft, model }) {
     ? `Available quantity is read-only: <strong>${renderInventoryQuantity(item.availableQuantity, item.unit)}</strong>. Stock changes require a separate transaction.`
     : 'A new item starts with zero stock. After saving the item, use Receive stock to record a delivery.'
   const fields = isItem ? renderItemFields(draft, model, item) : renderCategoryFields(draft)
+  const categoryFeedback = isItem ? inlineCategoryFeedback(draft, model) : ''
 
   return `<section class="card cafe-card inventory-form-panel" aria-labelledby="record-form-title">
     <div class="card-body inventory-stack">
@@ -154,7 +167,7 @@ export function renderRecordForm({ module, draft, model }) {
       <form data-inventory-form novalidate>
         <fieldset class="inventory-stack" ${draft.busy ? 'disabled' : ''}>
           ${isItem ? `<div class="inventory-item-fields">${fields}</div>` : fields}
-          ${draft.categoryFeedback ? `<p class="cafe-supporting mb-0" role="status" data-inline-category-feedback>${escapeInventoryText(draft.categoryFeedback)}</p>` : ''}
+          ${isItem ? `<p class="cafe-supporting mb-0" role="status" data-inline-category-status${categoryFeedback ? ' data-inline-category-feedback' : ' hidden'}>${escapeInventoryText(categoryFeedback)}</p>` : ''}
           ${draft.inlineCategory ? '' : `<div class="inventory-actions">
             <button class="btn btn-primary" type="submit"${draft.duplicateReview ? ' hidden' : ''}>${draft.busy ? 'Saving…' : `Save ${noun}`}</button>
             ${renderInventoryAction('cancel-form', 'Cancel')}
