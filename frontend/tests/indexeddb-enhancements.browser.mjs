@@ -465,17 +465,19 @@ async function verifyInlineRestart() {
 
 // Hold delivery of a real IndexedDB outcome after the native transaction has
 // already settled. Other tabs and fresh reads continue to use committed data.
-async function holdTransactionResult(page, event, mode = 'readwrite') {
+async function holdTransactionResult(page, event, mode = 'readwrite', { statusOnly = false, release = 'releaseTestTransaction' } = {}) {
   await page.evaluate(`(() => {
     const prototype = IDBTransaction.prototype
     const listen = prototype.addEventListener
-    window.releaseTestTransaction = null
+    window[${quote(release)}] = null
     prototype.addEventListener = function (type, listener, options) {
-      if (type !== ${quote(event)} || this.mode !== ${quote(mode)} ||
-        !this.objectStoreNames.contains('inventory_items')) return listen.call(this, type, listener, options)
+      const matchesStores = ${statusOnly}
+        ? this.objectStoreNames.length === 2 && this.objectStoreNames.contains('synchronization_queue')
+        : this.objectStoreNames.contains('inventory_items')
+      if (type !== ${quote(event)} || this.mode !== ${quote(mode)} || !matchesStores) return listen.call(this, type, listener, options)
       prototype.addEventListener = listen
       return listen.call(this, type, function (result) {
-        window.releaseTestTransaction = () => listener.call(this, result)
+        window[${quote(release)}] = () => listener.call(this, result)
       }, options)
     }
   })()`)
@@ -491,8 +493,8 @@ async function submitWithHeldResult(page, event) {
   await page.until('typeof window.releaseTestTransaction === "function"', 'native write settled before app receives its result')
 }
 
-async function releaseResult(page) {
-  await page.evaluate('new Promise(resolve => { window.releaseTestTransaction(); setTimeout(resolve, 0) })')
+async function releaseResult(page, release = 'releaseTestTransaction') {
+  await page.evaluate('new Promise(resolve => { window[' + quote(release) + '](); setTimeout(resolve, 0) })')
 }
 
 async function itemDraftValues(page) {
@@ -514,6 +516,205 @@ async function archiveInAnotherTab(page, id) {
   await page.click('[data-inventory-action="archive-category"][data-id=' + quote(id) + ']')
   await page.click('[data-inventory-action="confirm-archive"]')
   await page.until(contains('[data-inventory-feedback]', 'category archived'), 'archive committed in second tab')
+}
+
+async function processRefreshWhileBusy(page, change) {
+  const release = 'releaseTestStatus'
+  await holdTransactionResult(page, 'complete', 'readonly', { statusOnly: true, release })
+  await change()
+  await page.until('typeof window[' + quote(release) + '] === "function"', 'cross-tab status read ready')
+  await releaseResult(page, release)
+  assert.equal(await page.evaluate(element(categoryForm + ' fieldset') + '.disabled'), true)
+}
+
+async function addInlineCategory(page, name) {
+  await openCategory(page, name)
+  await page.click(createCategory)
+  return selectSavedCategory(page, name)
+}
+
+async function addCategoryInAnotherTab(page, name) {
+  await navigate(page, 'categories')
+  await page.click('[data-inventory-action="add-category"]')
+  await page.setField('#demo-field-name', name)
+  await page.click(itemForm + ' [type="submit"]')
+  await page.until(contains('[data-inventory-feedback]', 'category saved'), 'unrelated category committed in another tab')
+}
+
+async function runDeferredRefresh() {
+  if (evidence) await mkdir(evidence, { recursive: true })
+  const status = '[data-inline-category-status]'
+  const rejection = contains(categoryName + '-error', 'different name') + ' && !' + element(categoryForm + ' fieldset[disabled]')
+  const archivedSelectionCleared = value(categorySelect) + ' === "" && ' + contains(status, 'no longer available')
+  const categoryOption = (id) => element(categorySelect + ' option[value=' + quote(id) + ']')
+
+  for (const { mode, itemId, viewport } of [
+    { mode: 'Add item' }, { mode: 'Edit item on mobile', itemId: cups, viewport: { width: 390, height: 844 } },
+  ]) await test('archiving the selected category during a second rejected creation clears it on cancel in ' + mode, () => withPage(async (a, open) => {
+    const b = await open()
+    const item = 'Fictional coffee tasting tumblers'
+    const category = 'Fictional coffee tasting glassware'
+    await prepareItem(a, item, itemId)
+    const before = await dump(a)
+    const id = await addInlineCategory(a, category)
+    assert.equal(committedInlineCategory(before, await dump(a), category), id)
+    if (!itemId) await capture(a, '01-original-category-selected', itemForm)
+    await openCategory(a, 'Packaging', 'Fictional second category draft')
+    await submitWithHeldResult(a, 'abort')
+    if (!itemId) await capture(a, '02-second-category-creating', categoryForm)
+    await processRefreshWhileBusy(a, () => archiveInAnotherTab(b, id))
+    const archived = await dump(b)
+    assertQueue(archived, ['create_category', 'archive_category'])
+    assert.equal(archived.categories.find(({ category_id }) => category_id === id).is_active, false)
+    assert.deepEqual(archived.inventory_items, before.inventory_items)
+    assert.deepEqual(archived.stock_movements, before.stock_movements)
+    assert.deepEqual(archived.batch_allocations, before.batch_allocations)
+
+    await releaseResult(a)
+    await a.until(rejection, 'rejection visible with controls restored')
+    assert.equal(await a.evaluate(value(description)), 'Fictional second category draft')
+    if (!itemId) await capture(a, '03-duplicate-rejection-recovery', categoryForm)
+    await a.click('[data-inventory-action="cancel-inline-category"]')
+    await a.until('!' + element(categoryForm) + ' && ' + element('[data-inventory-content][aria-busy=false]'), 'item form restored')
+    assert.equal(await a.evaluate(value(categorySelect)), '', 'archived category must not remain selected')
+    assert.equal(await a.evaluate(element(categorySelect) + '.selectedOptions[0].textContent'), 'Choose an active category')
+    assert.equal(await a.evaluate('Boolean(' + categoryOption(id) + ')'), false)
+    assert.equal(await a.evaluate(contains(status, 'no longer available')), true)
+    assert.equal(await a.evaluate('document.activeElement.id'), 'demo-field-category_id')
+    assert.deepEqual(await itemDraftValues(a), [item, 'pieces', '27'])
+    assert.deepEqual(await dump(a), archived)
+    if (itemId) {
+      assert.equal(await a.evaluate('document.documentElement.scrollWidth <= innerWidth && ' +
+        element(categorySelect) + '.getBoundingClientRect().height >= 48'), true)
+      await capture(a, '06-mobile-recovery-state', status)
+      return
+    }
+    await capture(a, '04-archive-cleared-after-cancel', itemForm)
+
+    const alternative = 'Fictional replacement glassware'
+    await addInlineCategory(a, alternative)
+    const after = await dump(a)
+    assertQueue(after, ['create_category', 'archive_category', 'create_category'])
+    assert.equal(after.categories.length, archived.categories.length + 1)
+    assert.deepEqual(after.inventory_items, before.inventory_items)
+    await capture(a, '05-alternative-category-selected', itemForm)
+  }, viewport))
+
+  await test('multiple unrelated category notifications coalesce into one reconciliation and leave a valid selection intact', () => withPage(async (a, open) => {
+    const b = await open()
+    const category = 'Fictional lasting serviceware'
+    await prepareItem(a, 'Fictional tasting spoons')
+    const id = await addInlineCategory(a, category)
+    await openCategory(a, 'Packaging')
+    await submitWithHeldResult(a, 'abort')
+    await a.evaluate(`(() => {
+      const transaction = IDBDatabase.prototype.transaction
+      window.reconciliationReads = 0
+      IDBDatabase.prototype.transaction = function (stores, mode, ...options) {
+        if (mode === 'readonly' && stores.includes('inventory_items') && !stores.includes('staff_users')) window.reconciliationReads++
+        return transaction.call(this, stores, mode, ...options)
+      }
+    })()`)
+    for (const name of ['Fictional unrelated spice pockets', 'Fictional unrelated spoon cubbies']) {
+      await processRefreshWhileBusy(a, () => addCategoryInAnotherTab(b, name))
+    }
+    assert.equal(await a.evaluate('window.reconciliationReads'), 0)
+    const unrelated = await dump(b)
+    assertQueue(unrelated, ['create_category', 'create_category', 'create_category'])
+    await releaseResult(a)
+    await a.until(rejection, 'failure restored after the deferred read')
+    await a.click('[data-inventory-action="cancel-inline-category"]')
+    assert.equal(await selectSavedCategory(a, category), id)
+    assert.equal(await a.evaluate('window.reconciliationReads'), 1)
+    assert.deepEqual(await dump(a), unrelated)
+  }))
+
+  await test('a successful second creation selects the valid new category after the original is archived', () => withPage(async (a, open) => {
+    const b = await open()
+    await prepareItem(a, 'Fictional reusable pitchers')
+    const before = await dump(a)
+    const prior = await addInlineCategory(a, 'Fictional old serving reserve')
+    const category = 'Fictional replacement serving reserve'
+    await openCategory(a, category)
+    await submitWithHeldResult(a, 'complete')
+    await processRefreshWhileBusy(a, () => archiveInAnotherTab(b, prior))
+    const committed = await dump(b)
+    assertQueue(committed, ['create_category', 'create_category', 'archive_category'])
+    assert.equal(committed.categories.length, before.categories.length + 2)
+    assert.deepEqual(committed.inventory_items, before.inventory_items)
+    await releaseResult(a)
+    const selected = await selectSavedCategory(a, category)
+    assert.equal(committed.categories.find(({ category_id }) => category_id === selected).is_active, true)
+    assert.equal(await a.evaluate('Boolean(' + categoryOption(prior) + ')'), false)
+    assert.deepEqual(await itemDraftValues(a), ['Fictional reusable pitchers', 'pieces', '27'])
+    assert.deepEqual(await dump(a), committed)
+  }))
+
+  await test('a held reconciliation cannot overwrite a returning draft or newer keyboard selection', () => withPage(async (a, open) => {
+    const b = await open()
+    await prepareItem(a, 'Fictional service jars', cups)
+    const id = await addInlineCategory(a, 'Fictional outgoing serving supplies')
+    await openCategory(a, 'Packaging', 'Fictional pending label draft')
+    await submitWithHeldResult(a, 'abort')
+    await processRefreshWhileBusy(a, () => addCategoryInAnotherTab(b, 'Fictional unrelated storage trays'))
+    const delayedRead = 'releaseTestInventoryRead'
+    await holdTransactionResult(a, 'complete', 'readonly', { release: delayedRead })
+    await releaseResult(a)
+    await a.until('typeof window[' + quote(delayedRead) + '] === "function"', 'reconciliation read captured before it can render')
+    assert.equal(await a.evaluate(contains(status, 'saved and selected')), false)
+    const name = '#demo-field-name'
+    await a.setField(name, 'Fictional service jars updated')
+    await navigate(a, 'dashboard')
+    await a.until(contains('#page-title', 'Dashboard'), 'left during reconciliation')
+    await navigate(a, 'inventory')
+    await a.until(rejection, 'returning form renders the settled error')
+    await a.evaluate(element(name) + '.focus(); ' + element(name) + '.setSelectionRange(10, 17)')
+    await archiveInAnotherTab(b, id)
+    await a.until('!' + categoryOption(id), 'returning mount reconciles a newer archive')
+    await releaseResult(a, delayedRead)
+    assert.equal(await a.evaluate('Boolean(' + categoryOption(id) + ')'), false)
+    assert.deepEqual(await a.evaluate('[document.activeElement.id, document.activeElement.selectionStart, document.activeElement.selectionEnd]'),
+      ['demo-field-name', 10, 17])
+    assert.equal(await a.evaluate(value(description)), 'Fictional pending label draft')
+    const latest = await dump(b)
+    assertQueue(latest, ['create_category', 'create_category', 'archive_category'])
+    await a.click('[data-inventory-action="cancel-inline-category"]')
+    await a.until(archivedSelectionCleared, 'item draft reflects archived category')
+    assert.deepEqual(await itemDraftValues(a), ['Fictional service jars updated', 'pieces', '27'])
+    assert.deepEqual(await dump(a), latest)
+  }))
+
+  await test('a failed reconciliation read uses storage Retry and retains both drafts without writes', () => withPage(async (a, open) => {
+    const b = await open()
+    await prepareItem(a, 'Fictional cup carrying trays')
+    const id = await addInlineCategory(a, 'Fictional carryout reserve')
+    await openCategory(a, 'Packaging', 'Fictional retained category description')
+    await submitWithHeldResult(a, 'abort')
+    await processRefreshWhileBusy(a, () => archiveInAnotherTab(b, id))
+    const archived = await dump(b)
+    await a.evaluate(`(() => {
+      const transaction = IDBDatabase.prototype.transaction
+      IDBDatabase.prototype.transaction = function (stores, mode, ...options) {
+        if (mode === 'readonly' && stores.includes('inventory_items')) {
+          IDBDatabase.prototype.transaction = transaction
+          throw new DOMException('Fictional reconciliation read failure', 'InvalidStateError')
+        }
+        return transaction.call(this, stores, mode, ...options)
+      }
+    })()`)
+    await releaseResult(a)
+    await a.until(element('[data-storage-retry]') + ' && !' + element(categorySelect), 'storage gate replaces the stale draft view')
+    assert.deepEqual(await dump(a), archived)
+    await a.click('[data-storage-retry]')
+    await a.until(ready + ' && ' + rejection, 'Retry restores the draft and its validation')
+    assert.equal(await a.evaluate(value(categoryName)), 'Packaging')
+    assert.equal(await a.evaluate(value(description)), 'Fictional retained category description')
+    await a.click('[data-inventory-action="cancel-inline-category"]')
+    await a.until(archivedSelectionCleared, 'Retry uses the archived definition')
+    assert.deepEqual(await itemDraftValues(a), ['Fictional cup carrying trays', 'pieces', '27'])
+    assertQueue(archived, ['create_category', 'archive_category'])
+    assert.deepEqual(await dump(a), archived)
+  }))
 }
 
 async function runInlineLifecycle() {
@@ -741,7 +942,8 @@ async function runInlineLifecycle() {
 }
 
 try {
-  if (phase === '--lifecycle') await runInlineLifecycle()
+  if (phase === '--deferred-refresh') await runDeferredRefresh()
+  else if (phase === '--lifecycle') await runInlineLifecycle()
   else if (phase) await verifyInlineRestart()
   else await runFocused()
 } finally { browser.close() }

@@ -111,6 +111,8 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
     const saveLocation = isolated ? 'in this temporary session.' : 'in this browser.'
     let model
     let loadSequence = 0
+    let refreshRevision = 0
+    let reconciledRevision = 0
     let openLinkedItem = isInventory && Boolean(itemId)
     let linkedItemUnavailable = false
     let inlineCategoryCompletion
@@ -165,6 +167,14 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
         !openLinkedItem && !state.archive && !visibleDetail()
     }
 
+    function hasPendingRefresh() {
+      return refreshRevision !== reconciledRevision
+    }
+
+    function mutationPending() {
+      return state.draft?.busy || state.draft?.inlineCategory?.busy || state.archive?.busy
+    }
+
     function renderScreen() {
       if (!root.isConnected || !model) return
       renderFeedback()
@@ -216,13 +226,13 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       }
     }
 
-    function renderFromRead() {
+    function renderFromRead(reconcileCategory) {
       const draft = state.draft
       const completion = inlineCategoryCompletion
       inlineCategoryCompletion = undefined
       if (isInventory && (draft?.inlineCategory || draft?.createdCategoryId)) {
         const showingDraft = showsItemDraft(draft)
-        if (showingDraft && draft.createdCategoryId && draft.values.category_id === draft.createdCategoryId &&
+        if (reconcileCategory && showingDraft && draft.createdCategoryId && draft.values.category_id === draft.createdCategoryId &&
           !model.categoryById.get(draft.createdCategoryId)?.isActive) {
           draft.values.category_id = ''
           draft.duplicateReview = null
@@ -235,7 +245,9 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
     }
 
     async function load({ showLoading = true, focusHeading = false, afterRead, focusError = false } = {}) {
+      if (!root.isConnected) return
       const attempt = ++loadSequence
+      const revision = refreshRevision
       content.setAttribute('aria-busy', 'true')
       if (showLoading) content.innerHTML = renderLoading()
       else if (state.feedback) renderFeedback()
@@ -243,6 +255,13 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       try {
         const snapshot = await repository.read()
         if (!root.isConnected || loadSequence !== attempt) return
+        const currentRevision = revision === refreshRevision
+        if (!currentRevision) {
+          // A notification during this read is still pending. A busy form can
+          // use the snapshot to mount, but only a fresh read may reconcile it.
+          if (!mutationPending()) return load({ showLoading: false, focusHeading, afterRead, focusError })
+          if (model) return
+        }
         model = buildInventoryReadModel(snapshot)
         if (openLinkedItem) {
           openLinkedItem = false
@@ -268,7 +287,8 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
         }
         afterRead?.()
         renderIcons(context)
-        renderFromRead()
+        renderFromRead(currentRevision)
+        if (currentRevision) reconciledRevision = revision
         if (focusHeading) focusSection()
         if (focusError) focusIssue()
       } catch {
@@ -339,6 +359,11 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       if (!draft?.inlineCategory || draft.inlineCategory.busy) return
       draft.inlineCategory = null
       updateRefreshWarning()
+      if (hasPendingRefresh()) {
+        inlineCategoryCompletion = { draft, focus: itemCategorySelect }
+        void load({ showLoading: false })
+        return
+      }
       renderScreen()
       content.querySelector(itemCategorySelect).focus()
     }
@@ -346,12 +371,13 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
     function completeInlineCategory(draft, saved) {
       if (!showsItemDraft(draft)) return
       const focus = saved ? itemCategorySelect : inlineCategoryIssue
-      if (!saved && model) {
+      const needsRead = saved || hasPendingRefresh()
+      if (!needsRead && model) {
         renderPreservingFocus(focus)
         return
       }
       inlineCategoryCompletion = { draft, focus }
-      if (saved) return load({ showLoading: false })
+      if (needsRead) return load({ showLoading: false })
     }
 
     async function saveInlineCategory(form) {
@@ -389,9 +415,10 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       const draft = state.draft
       if (!draft || draft.busy || draft.inlineCategory) return
       const form = content.querySelector('[data-inventory-form]')
-      for (const [field, value] of new FormData(form)) updateDraftValue(form.elements.namedItem(field), value)
       const fieldset = form.querySelector('fieldset')
       const submit = fieldset.querySelector('[type="submit"]')
+      if (!submit) return
+      for (const [field, value] of new FormData(form)) updateDraftValue(form.elements.namedItem(field), value)
       if (confirmDuplicate !== Boolean(draft.duplicateReview)) {
         if (confirmDuplicate) submit.focus()
         return
@@ -430,7 +457,7 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
             draft.error = { message: 'This record changed in another tab. Unedited fields now show the latest values. Review your draft before saving again.' }
           } })
           updateRefreshWarning()
-        } else if (draft.duplicateReview?.matches.some(({ itemId }) => !model?.itemById.has(itemId))) {
+        } else if (hasPendingRefresh() || draft.duplicateReview?.matches.some(({ itemId }) => !model?.itemById.has(itemId))) {
           await load({ showLoading: false, focusError: true })
         } else {
           renderScreen()
@@ -451,7 +478,8 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       state.detail = detail.returnTo
       if (detail.id === itemId) history.replaceState(history.state, '', routeHref('inventory'))
       const draft = state.draft
-      if (showsItemDraft(draft) && draft.createdCategoryId && !model.categoryById.has(draft.createdCategoryId)) {
+      if (showsItemDraft(draft) && draft.createdCategoryId &&
+        (hasPendingRefresh() || !model.categoryById.has(draft.createdCategoryId))) {
         void load({ showLoading: false, focusHeading: true })
         return
       }
@@ -484,6 +512,8 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
             const record = (isInventory ? model.itemById : model.categoryById).get(archive.id)
             if (record) archive.expected = createDraft(module, record).initialValues
           } })
+        } else if (hasPendingRefresh()) {
+          await load({ showLoading: false, focusError: true })
         } else {
           renderScreen()
           if (root.isConnected) focusIssue()
@@ -590,18 +620,23 @@ export function createInventoryWorkspace({ repository, renderIcons, storageMode 
       }
     })
 
-    activeMount = { root, content, state, load, showsItemDraft, completeInlineCategory }
+    function requestRefresh() {
+      refreshRevision += 1
+      if (mutationPending()) return
+      const focused = document.activeElement
+      const draft = state.draft
+      const checkCreatedCategory = draft?.createdCategoryId && showsItemDraft(draft)
+      if (content.contains(focused) && focused.matches('input, textarea, select') && !checkCreatedCategory) return
+      return load({ showLoading: false })
+    }
+
+    activeMount = { root, load, completeInlineCategory, requestRefresh }
     void load()
   }
 
   function refresh() {
     const view = activeMount
-    if (!view?.root.isConnected || view.state.draft?.busy || view.state.draft?.inlineCategory?.busy || view.state.archive?.busy) return
-    const focused = document.activeElement
-    const draft = view.state.draft
-    const checkCreatedCategory = draft?.createdCategoryId && view.showsItemDraft(draft)
-    if (view.content.contains(focused) && focused.matches('input, textarea, select') && !checkCreatedCategory) return
-    return view.load({ showLoading: false })
+    if (view?.root.isConnected) return view.requestRefresh()
   }
 
   return { mount, refresh }
