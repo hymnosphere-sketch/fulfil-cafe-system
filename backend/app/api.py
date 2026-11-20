@@ -176,10 +176,10 @@ def add_headers(resp):
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Vary"] = "Origin"
         resp.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type, Accept, X-Inventory-Generation")
+            "Content-Type, Accept, X-Inventory-Generation, Retry-After")
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, OPTIONS"
         resp.headers["Access-Control-Expose-Headers"] = (
-            "X-Inventory-Generation, X-Inventory-Settings-Version")
+            "X-Inventory-Generation, X-Inventory-Settings-Version, Retry-After")
     if "generation" in g:
         resp.headers["X-Inventory-Generation"] = g.generation
         resp.headers["X-Inventory-Settings-Version"] = str(g.settings_version)
@@ -482,7 +482,7 @@ def snapshot():
         movements = s.scalars(select(Movement).order_by(Movement.created_at, Movement.movement_id)).all()
         allocs = s.scalars(select(Allocation).order_by(Allocation.allocation_id)).all()
         last = s.scalars(select(ProcessedOperation).order_by(
-            ProcessedOperation.processed_at.desc(), ProcessedOperation.operation_id.desc())
+            ProcessedOperation.commit_seq.desc())
             .limit(1)).first()
         data = {
             "schema_version": 1,
@@ -501,7 +501,8 @@ def snapshot():
                                    "movement_id": a.movement_id} for a in allocs],
             "settings": reports.get_settings(s),
             "sync": {"last_committed_operation_id": last.operation_id if last else None,
-                     "last_committed_at": svc.out_ts(last.processed_at) if last else None},
+                     "last_committed_at": svc.out_ts(last.processed_at) if last else None,
+                     "last_commit_seq": last.commit_seq if last else 0},
             "backup": {"last_successful_backup_at": None},
         }
     return ok(data)

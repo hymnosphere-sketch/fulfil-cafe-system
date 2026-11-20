@@ -23,6 +23,8 @@ _DECIMAL = re.compile(r"^(\d+)(?:\.(\d+))?$")
 
 
 def scale_for(unit_id):
+    if not isinstance(unit_id, str):
+        raise validation_error({"unit_of_measurement": "Must be a string."})
     if unit_id not in UNIT_PROFILES:
         raise validation_error({"unit_of_measurement": "Choose an approved unit."})
     return UNIT_PROFILES[unit_id]

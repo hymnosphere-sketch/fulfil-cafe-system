@@ -4,15 +4,20 @@ Each function documents its input, output and cost so it can be explained
 in the project defense. They mirror DATABASE_DESIGN section 5 and are meant
 to give the same answers as the frontend JavaScript for the same inputs.
 """
+from .errors import stock_error
 from .normalize import normalize_name
 
 OUT_OF_STOCK = "out_of_stock"
 LOW_STOCK = "low_stock"
 SUFFICIENT = "sufficient"
 
+MAX_SAFE = 9_007_199_254_740_991
+
 
 def classify_stock(balance, minimum):
     """O(1). 0 -> out of stock; 0 < balance <= minimum -> low; else sufficient."""
+    if balance < -MAX_SAFE or balance > MAX_SAFE:
+        raise stock_error("The derived item balance is outside the supported range.", "VALIDATION_ERROR")
     if balance == 0:
         return OUT_OF_STOCK
     if balance <= minimum:
@@ -113,7 +118,10 @@ def aggregate_movements(rows):
         k = (r["item_id"], r["unit_of_measurement"], r["movement_type"])
         g = groups.setdefault(k, {"movement_count": 0, "total_quantity_change": 0})
         g["movement_count"] += 1
-        g["total_quantity_change"] += r["quantity_change"]
+        total = g["total_quantity_change"] + r["quantity_change"]
+        if total < -MAX_SAFE or total > MAX_SAFE:
+            raise stock_error("The aggregated quantity is outside the supported range.", "VALIDATION_ERROR")
+        g["total_quantity_change"] = total
     return [
         {
             "item_id": k[0],

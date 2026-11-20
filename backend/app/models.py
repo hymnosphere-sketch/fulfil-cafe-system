@@ -115,6 +115,7 @@ class ProcessedOperation(Base):
     fingerprint_profile: Mapped[str] = mapped_column(String(32))
     processed_at: Mapped[str] = mapped_column(String(24))
     processing_result: Mapped[str] = mapped_column(Text)  # JSON text
+    commit_seq: Mapped[int] = mapped_column(BigInteger, index=True)  # authoritative commit order
 
 
 class Setting(Base):

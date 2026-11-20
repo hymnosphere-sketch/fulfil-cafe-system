@@ -21,3 +21,7 @@ def invalid_request(message="The request is malformed.", details=None):
 
 def validation_error(fields, message="The submitted information is invalid."):
     return ApiError("VALIDATION_ERROR", message, 422, {"fields": fields})
+
+
+def stock_error(message, code="INSUFFICIENT_STOCK"):
+    return ApiError(code, message, 422)
