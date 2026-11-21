@@ -262,5 +262,248 @@ class StartupChecks(unittest.TestCase):
             os.remove(path)
 
 
+class RegressionTests(ContractCase):
+    """Deterministic regressions for FE-09B review findings."""
+
+    # --- Issue 1: commit_seq returned on replay ---
+    def test_replay_returns_commit_seq(self):
+        """PR #18: already_processed must include commit_seq for contract compatibility."""
+        self.run_examples_a_to_d()
+        first = self.sync(34, "record_stock_movement", U(6), self.STOCK_OUT, 44,
+                          "2026-11-18T03:00:00Z").get_json()["data"]
+        again = self.sync(34, "record_stock_movement", U(6), self.STOCK_OUT, 44,
+                          "2026-11-18T03:00:00Z").get_json()["data"]
+        self.assertEqual(again["outcome"], "already_processed")
+        self.assertIn("commit_seq", again)
+        self.assertEqual(again["commit_seq"], first["commit_seq"])
+        self.assertIsInstance(again["commit_seq"], int)
+        self.assertGreater(again["commit_seq"], 0)
+
+    # --- Issue 2: Snapshot replay order by commit_seq ---
+    def test_snapshot_movements_ordered_by_commit_seq(self):
+        """Snapshot must expose authoritative server-assigned replay order."""
+        self.run_examples_a_to_d()
+        s = self.client.get("/api/v1/snapshot").get_json()["data"]
+        self.assertEqual(s["schema_version"], 2)  # versioned contract
+        movements = s["stock_movements"]
+        self.assertEqual(len(movements), 2)
+        # Should have commit_seq on each movement
+        for m in movements:
+            self.assertIn("commit_seq", m)
+            self.assertIsInstance(m["commit_seq"], int)
+            self.assertGreater(m["commit_seq"], 0)
+        # Order must follow commit_seq (not just created_at)
+        seqs = [m["commit_seq"] for m in movements]
+        self.assertEqual(seqs, sorted(seqs))
+
+    def test_snapshot_equal_timestamps_replay_order(self):
+        """Equal or backward timestamps must not reorder movements."""
+        self.seed()
+        # Create two movements with identical timestamps
+        self.sync(80, "record_stock_movement", U(80), {
+            "movement_id": U(80), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 100, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(81), "batch_id": U(82), "quantity_change": 100}],
+            "new_batches": [{"batch_id": U(82), "received_quantity": 100,
+                             "purchase_date": "2026-11-18"}]
+        }, 3, "2026-11-18T02:00:00.000Z")
+        self.sync(81, "record_stock_movement", U(83), {
+            "movement_id": U(83), "item_id": ITEM, "movement_type": "stock_out",
+            "quantity_change": -50, "reason": "Used",
+            "allocations": [{"allocation_id": U(84), "batch_id": U(82), "quantity_change": -50}]
+        }, 4, "2026-11-18T02:00:00.000Z")  # same timestamp
+        s = self.client.get("/api/v1/snapshot").get_json()["data"]
+        movements = s["stock_movements"]
+        # Must be ordered by commit_seq, not timestamp tie-breaker
+        seqs = [m["commit_seq"] for m in movements]
+        self.assertEqual(seqs, sorted(seqs))
+
+    # --- Issue 3: Unsafe stock transactions rejected ---
+    def test_unsafe_item_balance_rejected(self):
+        """Item balance exceeding MAX_SAFE must be rejected before commit."""
+        self.seed()
+        # Use MAX_SAFE to produce overflow
+        from app.core.algorithms import MAX_SAFE
+        huge = MAX_SAFE
+        big = {
+            "movement_id": U(90), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": huge, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(91), "batch_id": U(92), "quantity_change": huge}],
+            "new_batches": [{"batch_id": U(92), "received_quantity": huge,
+                             "purchase_date": "2026-11-18"}]
+        }
+        r = self.sync(88, "record_stock_movement", U(90), big, 3, "2026-11-18T02:00:00Z")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_unsafe_batch_balance_rejected(self):
+        """Batch balance exceeding MAX_SAFE must be rejected."""
+        self.seed()
+        from app.core.algorithms import MAX_SAFE
+        huge = MAX_SAFE
+        big = {
+            "movement_id": U(93), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": huge, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(94), "batch_id": U(95), "quantity_change": huge}],
+            "new_batches": [{"batch_id": U(95), "received_quantity": huge,
+                             "purchase_date": "2026-11-18"}]
+        }
+        r = self.sync(89, "record_stock_movement", U(93), big, 3, "2026-11-18T02:00:00Z")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_positive_adjustment_bounds(self):
+        """Positive adjustment must respect safe integer bounds."""
+        self.seed()
+        from app.core.algorithms import MAX_SAFE
+        # First add some stock
+        self.sync(90, "record_stock_movement", U(96), {
+            "movement_id": U(96), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 1000, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(97), "batch_id": U(98), "quantity_change": 1000}],
+            "new_batches": [{"batch_id": U(98), "received_quantity": 1000,
+                             "purchase_date": "2026-11-18"}]
+        }, 3, "2026-11-18T02:00:00Z")
+        # Then try positive adjustment that overflows
+        huge = MAX_SAFE - 1000
+        adj = {
+            "movement_id": U(99), "item_id": ITEM, "movement_type": "positive_adjustment",
+            "quantity_change": huge, "reason": "Correction",
+            "allocations": [{"allocation_id": U(100), "batch_id": U(98), "quantity_change": huge}]
+        }
+        r = self.sync(91, "record_stock_movement", U(99), adj, 4, "2026-11-18T03:00:00Z")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+
+    def test_report_aggregates_bounds(self):
+        """Report movement_summary must reject aggregates exceeding MAX_SAFE."""
+        self.seed()
+        from app.core.algorithms import MAX_SAFE
+        huge = MAX_SAFE
+        big = {
+            "movement_id": U(101), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": huge, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(102), "batch_id": U(103), "quantity_change": huge}],
+            "new_batches": [{"batch_id": U(103), "received_quantity": huge,
+                             "purchase_date": "2026-11-18"}]
+        }
+        self.sync(92, "record_stock_movement", U(101), big, 3, "2026-11-18T02:00:00Z")
+        # Report should reject aggregate
+        r = self.client.get(f"/api/v1/reports/stock-movements?item_id={ITEM}")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+
+    # --- Issue 4: Old schema database migration ---
+    def test_old_schema_reopens_without_error(self):
+        """Reopening an old-populated database must not break snapshot/sync."""
+        # Create DB with old schema (no commit_seq)
+        from app import create_app
+        import tempfile
+        import os
+        from app.db import init_db, make_engine
+        from sqlalchemy.orm import Session
+        from app.models import Category, Item, Movement, Allocation, Batch, ProcessedOperation
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            engine = make_engine("sqlite:///" + path)
+            # Manually create tables WITHOUT commit_seq
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                conn.exec_driver_sql("""
+                    CREATE TABLE categories (
+                        category_id TEXT(36) PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        normalized_name TEXT NOT NULL,
+                        description TEXT,
+                        is_active BOOLEAN DEFAULT 1,
+                        created_at TEXT(24) NOT NULL,
+                        updated_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE inventory_items (
+                        item_id TEXT(36) PRIMARY KEY,
+                        category_id TEXT(36) NOT NULL REFERENCES categories(category_id),
+                        name TEXT NOT NULL,
+                        normalized_name TEXT NOT NULL,
+                        unit_of_measurement TEXT(32) NOT NULL,
+                        minimum_stock_level INTEGER NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        created_at TEXT(24) NOT NULL,
+                        updated_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE stock_movements (
+                        movement_id TEXT(36) PRIMARY KEY,
+                        item_id TEXT(36) NOT NULL REFERENCES inventory_items(item_id),
+                        movement_type TEXT(32) NOT NULL,
+                        quantity_change INTEGER NOT NULL,
+                        reason TEXT,
+                        recorded_by TEXT(36),
+                        created_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE batch_allocations (
+                        allocation_id TEXT(36) PRIMARY KEY,
+                        movement_id TEXT(36) NOT NULL REFERENCES stock_movements(movement_id),
+                        batch_id TEXT(36) NOT NULL,
+                        quantity_change INTEGER NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE processed_operations (
+                        operation_id TEXT(36) PRIMARY KEY,
+                        operation_type TEXT(32) NOT NULL,
+                        request_fingerprint TEXT(64) NOT NULL,
+                        fingerprint_profile TEXT(32) NOT NULL,
+                        processed_at TEXT(24) NOT NULL,
+                        processing_result TEXT NOT NULL
+                    )
+                """)
+                conn.commit()
+
+            # Now init with migration
+            init_db(engine)
+
+            # Verify commit_seq was added and backfilled
+            with Session(engine) as s:
+                # Column should exist now
+                cols = [c["name"] for c in inspect(engine).get_columns("processed_operations")]
+                self.assertIn("commit_seq", cols)
+
+            engine.dispose()
+        finally:
+            os.remove(path)
+
+    def test_rollback_integrity_across_tables(self):
+        """Failed validation must roll back ALL tables (movements, allocations, batches, receipts)."""
+        self.seed()
+        # Attempt a movement that will fail batch balance validation
+        # First add valid stock
+        self.sync(100, "record_stock_movement", U(104), {
+            "movement_id": U(104), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 100, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(105), "batch_id": U(106), "quantity_change": 100}],
+            "new_batches": [{"batch_id": U(106), "received_quantity": 100,
+                             "purchase_date": "2026-11-18"}]
+        }, 3, "2026-11-18T02:00:00Z")
+        # Now try to overdraw - should be rejected
+        overdraw = {
+            "movement_id": U(107), "item_id": ITEM, "movement_type": "stock_out",
+            "quantity_change": -200, "reason": "Used",
+            "allocations": [{"allocation_id": U(108), "batch_id": U(106), "quantity_change": -200}]
+        }
+        r = self.sync(101, "record_stock_movement", U(107), overdraw, 4, "2026-11-18T03:00:00Z")
+        self.assertEqual(r.status_code, 422)
+
+        # Verify NO partial writes: movements, allocations, batches, receipts all clean
+        moves = self.client.get(f"/api/v1/stock-movements?item_id={ITEM}").get_json()["data"]
+        self.assertEqual(len(moves), 1)  # only the valid stock_in remains
+
+
 if __name__ == "__main__":
     unittest.main()

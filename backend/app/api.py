@@ -460,6 +460,7 @@ def report_movements():
         if item_id:
             svc.get_item(s, item_id)
         rows = reports.movement_summary(s, item_id, mtype, start, end)
+        reports.validate_report_aggregates(rows)
     page, meta = paginate(rows)
     return ok(page, meta=meta)
 
@@ -479,13 +480,28 @@ def snapshot():
                            "status": "accepted" if r else "missing",
                            "processed_at": svc.out_ts(r.processed_at) if r else None})
         items = svc.all_item_views(s)
-        movements = s.scalars(select(Movement).order_by(Movement.created_at, Movement.movement_id)).all()
         allocs = s.scalars(select(Allocation).order_by(Allocation.allocation_id)).all()
+
+        # Build movement -> commit_seq map for authoritative replay order
+        movement_commit_seq = {}
+        for m_id, c_seq in s.execute(
+            select(Movement.movement_id, ProcessedOperation.commit_seq)
+            .join(ProcessedOperation, ProcessedOperation.operation_id == Movement.movement_id)
+        ):
+            movement_commit_seq[m_id] = c_seq
+
+        # Get all movements and sort by authoritative commit sequence (fallback to created_at)
+        all_movements = s.scalars(select(Movement)).all()
+        movements = sorted(
+            all_movements,
+            key=lambda m: (movement_commit_seq.get(m.movement_id, 0), m.created_at, m.movement_id)
+        )
+
         last = s.scalars(select(ProcessedOperation).order_by(
             ProcessedOperation.commit_seq.desc())
             .limit(1)).first()
         data = {
-            "schema_version": 1,
+            "schema_version": 2,
             "server_generation_id": current_generation(s),
             "receipt_checks": checks,
             "snapshot_at": canonical_timestamp(now_fn()).replace(".000Z", "Z"),
@@ -494,8 +510,13 @@ def snapshot():
             "inventory_items": sorted(items, key=lambda i: i["item_id"]),
             "stock_batches": [svc.batch_view(s, b) for b in s.scalars(
                 select(Batch).order_by(Batch.batch_id))],
-            "stock_movements": [{k: v for k, v in svc.movement_view(s, m).items()
-                                 if k != "allocations"} for m in movements],
+            "stock_movements": [
+                {
+                    **{k: v for k, v in svc.movement_view(s, m).items() if k != "allocations"},
+                    "commit_seq": movement_commit_seq.get(m.movement_id)
+                }
+                for m in movements
+            ],
             "batch_allocations": [{"allocation_id": a.allocation_id, "batch_id": a.batch_id,
                                    "quantity_change": a.quantity_change,
                                    "movement_id": a.movement_id} for a in allocs],

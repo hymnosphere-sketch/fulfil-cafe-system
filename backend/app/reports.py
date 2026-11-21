@@ -2,6 +2,7 @@
 from sqlalchemy import func, select
 
 from .core import algorithms as alg
+from .core.errors import ApiError
 from .core.timeutil import business_date
 from .models import Allocation, Batch, Item, Movement
 from .services import all_item_views, batch_view, movement_view
@@ -89,3 +90,13 @@ def movement_summary(session, item_id, movement_type, start, end):
              "movement_type": m.movement_type, "quantity_change": m.quantity_change}
             for m, unit in session.execute(q).all()]
     return alg.aggregate_movements(rows)
+
+
+def validate_report_aggregates(rows):
+    """Validate report aggregates are within safe integer range."""
+    from .core.algorithms import MAX_SAFE
+    for r in rows:
+        total = r.get("total_quantity_change", 0)
+        if total < -MAX_SAFE or total > MAX_SAFE:
+            raise ApiError("VALIDATION_ERROR",
+                           "A report aggregate is outside the supported range.", 422)

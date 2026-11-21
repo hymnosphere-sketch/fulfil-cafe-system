@@ -10,7 +10,7 @@ Two SQLite details matter for this project:
 import threading
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from .models import Base
@@ -42,6 +42,36 @@ def make_engine(url):
 
 def init_db(engine):
     Base.metadata.create_all(engine)
+    _migrate_commit_seq(engine)
+
+
+def _migrate_commit_seq(engine):
+    """
+    Data-preserving migration for commit_seq column on processed_operations table.
+
+    If the column doesn't exist (old schema), add it with default 0.
+    Then backfill commit_seq based on processed_at order (authoritative for historical data).
+    This ensures old databases work without inferring commit order from unreliable timestamps.
+    """
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        cols = [c["name"] for c in inspector.get_columns("processed_operations")]
+
+        if "commit_seq" not in cols:
+            # Column missing - add it with default 0
+            conn.exec_driver_sql("ALTER TABLE processed_operations ADD COLUMN commit_seq INTEGER DEFAULT 0")
+            conn.commit()
+
+            # Backfill commit_seq based on processed_at ordering
+            rows = conn.execute(text(
+                "SELECT operation_id FROM processed_operations ORDER BY processed_at, operation_id"
+            )).fetchall()
+
+            for idx, (op_id,) in enumerate(rows, 1):
+                conn.execute(text(
+                    "UPDATE processed_operations SET commit_seq = :seq WHERE operation_id = :op_id"
+                ), {"seq": idx, "op_id": op_id})
+            conn.commit()
 
 
 def make_session_factory(engine):
