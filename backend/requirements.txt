@@ -1,0 +1,4 @@
+Flask>=3.0,<4
+SQLAlchemy>=2.0,<3
+# Windows ships no IANA time-zone database; zoneinfo (Asia/Manila) needs this.
+tzdata>=2024.1
