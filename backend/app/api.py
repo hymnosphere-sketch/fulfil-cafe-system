@@ -459,7 +459,11 @@ def report_movements():
     with scope() as s:
         if item_id:
             svc.get_item(s, item_id)
-        rows = reports.movement_summary(s, item_id, mtype, start, end)
+        try:
+            rows = reports.movement_summary(s, item_id, mtype, start, end)
+        except ApiError as e:
+            # Convert to proper response
+            raise
     page, meta = paginate(rows)
     return ok(page, meta=meta)
 
@@ -479,13 +483,37 @@ def snapshot():
                            "status": "accepted" if r else "missing",
                            "processed_at": svc.out_ts(r.processed_at) if r else None})
         items = svc.all_item_views(s)
-        movements = s.scalars(select(Movement).order_by(Movement.created_at, Movement.movement_id)).all()
         allocs = s.scalars(select(Allocation).order_by(Allocation.allocation_id)).all()
+
+        # Check migration status to determine if replay order is authoritative
+        from .db import _check_migration_status
+        migration_status = _check_migration_status(s.bind)
+
+        # Build movement -> commit_seq map for authoritative replay order
+        # Join on entity_id (durable association recorded at commit time)
+        movement_commit_seq = {}
+        movement_metadata = {}  # track migration_metadata per movement
+        for m_id, c_seq, meta in s.execute(
+            select(Movement.movement_id, ProcessedOperation.commit_seq, ProcessedOperation.migration_metadata)
+            .join(ProcessedOperation, ProcessedOperation.entity_id == Movement.movement_id)
+            .where(ProcessedOperation.operation_type == "record_stock_movement")
+        ):
+            movement_commit_seq[m_id] = c_seq
+            movement_metadata[m_id] = meta or "verified"
+
+        # Get all movements and sort
+        all_movements = s.scalars(select(Movement)).all()
+        # For provisional migrations, fall back to created_at ordering and flag
+        movements = sorted(
+            all_movements,
+            key=lambda m: (movement_commit_seq.get(m.movement_id, 0), m.created_at, m.movement_id)
+        )
+
         last = s.scalars(select(ProcessedOperation).order_by(
             ProcessedOperation.commit_seq.desc())
             .limit(1)).first()
         data = {
-            "schema_version": 1,
+            "schema_version": 2,
             "server_generation_id": current_generation(s),
             "receipt_checks": checks,
             "snapshot_at": canonical_timestamp(now_fn()).replace(".000Z", "Z"),
@@ -494,8 +522,14 @@ def snapshot():
             "inventory_items": sorted(items, key=lambda i: i["item_id"]),
             "stock_batches": [svc.batch_view(s, b) for b in s.scalars(
                 select(Batch).order_by(Batch.batch_id))],
-            "stock_movements": [{k: v for k, v in svc.movement_view(s, m).items()
-                                 if k != "allocations"} for m in movements],
+            "stock_movements": [
+                {
+                    **{k: v for k, v in svc.movement_view(s, m).items() if k != "allocations"},
+                    "commit_seq": movement_commit_seq.get(m.movement_id),
+                    "replay_status": movement_metadata.get(m.movement_id, "verified")
+                }
+                for m in movements
+            ],
             "batch_allocations": [{"allocation_id": a.allocation_id, "batch_id": a.batch_id,
                                    "quantity_change": a.quantity_change,
                                    "movement_id": a.movement_id} for a in allocs],
@@ -504,6 +538,11 @@ def snapshot():
                      "last_committed_at": svc.out_ts(last.processed_at) if last else None,
                      "last_commit_seq": last.commit_seq if last else 0},
             "backup": {"last_successful_backup_at": None},
+            "migration": {
+                "status": migration_status["status"],
+                "has_provisional": migration_status.get("has_provisional", False),
+                "provisional_count": migration_status.get("provisional_count", 0)
+            }
         }
     return ok(data)
 

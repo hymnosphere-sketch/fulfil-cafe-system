@@ -111,11 +111,13 @@ class ProcessedOperation(Base):
     __tablename__ = "processed_operations"
     operation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     operation_type: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[str] = mapped_column(String(36), index=True)  # movement_id, item_id, category_id
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     fingerprint_profile: Mapped[str] = mapped_column(String(32))
     processed_at: Mapped[str] = mapped_column(String(24))
     processing_result: Mapped[str] = mapped_column(Text)  # JSON text
     commit_seq: Mapped[int] = mapped_column(BigInteger, index=True)  # authoritative commit order
+    migration_metadata: Mapped[str] = mapped_column(Text, default="verified")  # 'verified' or 'provisional'
 
 
 class Setting(Base):

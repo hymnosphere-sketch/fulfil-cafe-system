@@ -321,6 +321,23 @@ def _record_movement(session, entity_id, created, p):
         if batch_remaining(session, bid) != session.get(Batch, bid).received_quantity:
             raise ApiError("INVALID_BATCH_ALLOCATION",
                            "A new batch must be allocated exactly its received quantity.", 422)
+
+    # Validate resulting item balance is within safe integer range
+    item_bal = item_balance(session, it.item_id)
+    from .core.algorithms import MAX_SAFE
+    if item_bal < -MAX_SAFE or item_bal > MAX_SAFE:
+        raise ApiError("VALIDATION_ERROR",
+                       "The resulting item balance is outside the supported range.", 422)
+
+    # Validate all batch balances for this item are within safe integer range
+    from sqlalchemy import select as sql_select
+    batch_ids = session.scalars(sql_select(Batch.batch_id).where(Batch.item_id == it.item_id)).all()
+    for bid in batch_ids:
+        batch_bal = batch_remaining(session, bid)
+        if batch_bal < -MAX_SAFE or batch_bal > MAX_SAFE:
+            raise ApiError("VALIDATION_ERROR",
+                           "A resulting batch balance is outside the supported range.", 422)
+
     session.flush()
     return movement_view(session, session.get(Movement, entity_id))
 
@@ -341,7 +358,8 @@ def _receipt_response(receipt, fp):
                                                   "outcome": "rejected"})
     return {"operation_id": receipt.operation_id, "outcome": "already_processed",
             "processed_at": out_ts(receipt.processed_at),
-            "result": json.loads(receipt.processing_result)}
+            "result": json.loads(receipt.processing_result),
+            "commit_seq": receipt.commit_seq}
 
 
 def process_command(session, now_fn, *, operation_id, operation_type, entity_id,
@@ -362,6 +380,7 @@ def process_command(session, now_fn, *, operation_id, operation_type, entity_id,
     commit_seq = _next_commit_seq(session)
     session.add(ProcessedOperation(
         operation_id=operation_id, operation_type=operation_type,
+        entity_id=entity_id,  # durable association: movement_id, item_id, or category_id
         request_fingerprint=fp, fingerprint_profile=PROFILE,
         processed_at=processed_at, processing_result=json.dumps(result),
         commit_seq=commit_seq))
