@@ -482,16 +482,25 @@ def snapshot():
         items = svc.all_item_views(s)
         allocs = s.scalars(select(Allocation).order_by(Allocation.allocation_id)).all()
 
+        # Check migration status to determine if replay order is authoritative
+        from .db import _check_migration_status
+        migration_status = _check_migration_status(s.bind)
+
         # Build movement -> commit_seq map for authoritative replay order
+        # Join on entity_id (durable association recorded at commit time)
         movement_commit_seq = {}
-        for m_id, c_seq in s.execute(
-            select(Movement.movement_id, ProcessedOperation.commit_seq)
-            .join(ProcessedOperation, ProcessedOperation.operation_id == Movement.movement_id)
+        movement_metadata = {}  # track migration_metadata per movement
+        for m_id, c_seq, meta in s.execute(
+            select(Movement.movement_id, ProcessedOperation.commit_seq, ProcessedOperation.migration_metadata)
+            .join(ProcessedOperation, ProcessedOperation.entity_id == Movement.movement_id)
+            .where(ProcessedOperation.operation_type == "record_stock_movement")
         ):
             movement_commit_seq[m_id] = c_seq
+            movement_metadata[m_id] = meta or "verified"
 
-        # Get all movements and sort by authoritative commit sequence (fallback to created_at)
+        # Get all movements and sort
         all_movements = s.scalars(select(Movement)).all()
+        # For provisional migrations, fall back to created_at ordering and flag
         movements = sorted(
             all_movements,
             key=lambda m: (movement_commit_seq.get(m.movement_id, 0), m.created_at, m.movement_id)
@@ -513,7 +522,8 @@ def snapshot():
             "stock_movements": [
                 {
                     **{k: v for k, v in svc.movement_view(s, m).items() if k != "allocations"},
-                    "commit_seq": movement_commit_seq.get(m.movement_id)
+                    "commit_seq": movement_commit_seq.get(m.movement_id),
+                    "replay_status": movement_metadata.get(m.movement_id, "verified")
                 }
                 for m in movements
             ],
@@ -525,6 +535,11 @@ def snapshot():
                      "last_committed_at": svc.out_ts(last.processed_at) if last else None,
                      "last_commit_seq": last.commit_seq if last else 0},
             "backup": {"last_successful_backup_at": None},
+            "migration": {
+                "status": migration_status["status"],
+                "has_provisional": migration_status.get("has_provisional", False),
+                "provisional_count": migration_status.get("provisional_count", 0)
+            }
         }
     return ok(data)
 

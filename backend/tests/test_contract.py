@@ -12,6 +12,8 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
+from sqlalchemy import inspect
+
 try:
     import sqlalchemy  # noqa: F401
     HAVE_DB = True
@@ -53,6 +55,12 @@ class ContractCase(unittest.TestCase):
                 "payload": payload, "created_at": created, "local_sequence": seq}
         return self.client.post("/api/v1/sync", json=body,
                                 headers={"X-Inventory-Generation": self.gen})
+
+    def seed(self):
+        """Seed minimal data for tests that need it."""
+        self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z")
+        self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z")
+        self.sync(33, "record_stock_movement", U(4), self.STOCK_IN, 3, "2026-11-18T02:05:00Z")
 
     CREATE_CAT = {"category_id": CAT, "name": "Ingredients"}
     CREATE_ITEM = {"item_id": ITEM, "category_id": CAT, "name": "Coffee Beans",
@@ -472,8 +480,10 @@ class RegressionTests(ContractCase):
             # Verify commit_seq was added and backfilled
             with Session(engine) as s:
                 # Column should exist now
+                from sqlalchemy import inspect
                 cols = [c["name"] for c in inspect(engine).get_columns("processed_operations")]
                 self.assertIn("commit_seq", cols)
+                self.assertIn("migration_metadata", cols)
 
             engine.dispose()
         finally:
@@ -503,6 +513,250 @@ class RegressionTests(ContractCase):
         # Verify NO partial writes: movements, allocations, batches, receipts all clean
         moves = self.client.get(f"/api/v1/stock-movements?item_id={ITEM}").get_json()["data"]
         self.assertEqual(len(moves), 1)  # only the valid stock_in remains
+
+    # --- Additional regressions requested ---
+
+    def test_max_safe_integer_then_rejected(self):
+        """Receiving MAX_SAFE then 2 more must reject and leave no new records."""
+        self.seed()
+        from app.core.algorithms import MAX_SAFE
+
+        # First receipt: MAX_SAFE
+        first = {
+            "movement_id": U(200), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": MAX_SAFE, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(201), "batch_id": U(202), "quantity_change": MAX_SAFE}],
+            "new_batches": [{"batch_id": U(202), "received_quantity": MAX_SAFE,
+                             "purchase_date": "2026-11-18"}]
+        }
+        r1 = self.sync(150, "record_stock_movement", U(200), first, 3, "2026-11-18T02:00:00Z")
+        self.assertEqual(r1.status_code, 200)
+
+        # Second receipt: +2 pieces (should overflow)
+        second = {
+            "movement_id": U(203), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 2, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(204), "batch_id": U(205), "quantity_change": 2}],
+            "new_batches": [{"batch_id": U(205), "received_quantity": 2,
+                             "purchase_date": "2026-11-18"}]
+        }
+        r2 = self.sync(151, "record_stock_movement", U(203), second, 4, "2026-11-18T03:00:00Z")
+        self.assertEqual(r2.status_code, 422)
+        self.assertEqual(r2.get_json()["error"]["code"], "VALIDATION_ERROR")
+
+        # Verify no new movement, allocation, batch, or receipt records
+        moves = self.client.get(f"/api/v1/stock-movements?item_id={ITEM}").get_json()["data"]
+        self.assertEqual(len(moves), 1)  # only first receipt remains
+        snap = self.client.get(f"/api/v1/snapshot?receipt_id={U(151)}").get_json()["data"]
+        self.assertEqual(snap["receipt_checks"][0]["status"], "missing")
+
+    def test_existing_batch_adjustment_overflow(self):
+        """Positive adjustment to existing batch must respect bounds."""
+        self.seed()
+        from app.core.algorithms import MAX_SAFE
+
+        # Create stock with room for adjustment
+        self.sync(160, "record_stock_movement", U(210), {
+            "movement_id": U(210), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 1000, "reason": "Delivery",
+            "allocations": [{"allocation_id": U(211), "batch_id": U(212), "quantity_change": 1000}],
+            "new_batches": [{"batch_id": U(212), "received_quantity": 1000,
+                             "purchase_date": "2026-11-18"}]
+        }, 3, "2026-11-18T02:00:00Z")
+
+        # Try positive adjustment that would overflow
+        huge = MAX_SAFE - 1000
+        adj = {
+            "movement_id": U(213), "item_id": ITEM, "movement_type": "positive_adjustment",
+            "quantity_change": huge, "reason": "Correction",
+            "allocations": [{"allocation_id": U(214), "batch_id": U(212), "quantity_change": huge}]
+        }
+        r = self.sync(161, "record_stock_movement", U(213), adj, 4, "2026-11-18T03:00:00Z")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+
+        # Verify no partial write
+        batch = self.client.get(f"/api/v1/batches/{U(212)}").get_json()["data"]
+        self.assertEqual(batch["remaining_quantity"], 1000)
+
+    def test_historical_migration_with_populated_records(self):
+        """Migration must preserve real receipt, withdrawal, allocation, and processed-operation records."""
+        from app import create_app
+        import tempfile
+        import os
+        from app.db import init_db, make_engine
+        from sqlalchemy.orm import Session
+        from app.models import Category, Item, Movement, Allocation, Batch, ProcessedOperation
+        from sqlalchemy import inspect
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            engine = make_engine("sqlite:///" + path)
+            # Create old schema
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                conn.exec_driver_sql("""
+                    CREATE TABLE categories (
+                        category_id TEXT(36) PRIMARY KEY,
+                        name TEXT NOT NULL, normalized_name TEXT NOT NULL,
+                        description TEXT, is_active BOOLEAN DEFAULT 1,
+                        created_at TEXT(24) NOT NULL, updated_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE inventory_items (
+                        item_id TEXT(36) PRIMARY KEY,
+                        category_id TEXT(36) NOT NULL REFERENCES categories(category_id),
+                        name TEXT NOT NULL, normalized_name TEXT NOT NULL,
+                        unit_of_measurement TEXT(32) NOT NULL,
+                        minimum_stock_level INTEGER NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        created_at TEXT(24) NOT NULL, updated_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE stock_movements (
+                        movement_id TEXT(36) PRIMARY KEY,
+                        item_id TEXT(36) NOT NULL REFERENCES inventory_items(item_id),
+                        movement_type TEXT(32) NOT NULL,
+                        quantity_change INTEGER NOT NULL, reason TEXT,
+                        recorded_by TEXT(36), created_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE stock_batches (
+                        batch_id TEXT(36) PRIMARY KEY,
+                        item_id TEXT(36) NOT NULL REFERENCES inventory_items(item_id),
+                        received_quantity INTEGER NOT NULL,
+                        purchase_date TEXT, purchase_cost INTEGER,
+                        expiration_date TEXT, created_at TEXT(24) NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE batch_allocations (
+                        allocation_id TEXT(36) PRIMARY KEY,
+                        movement_id TEXT(36) NOT NULL REFERENCES stock_movements(movement_id),
+                        batch_id TEXT(36) NOT NULL, quantity_change INTEGER NOT NULL
+                    )
+                """)
+                conn.exec_driver_sql("""
+                    CREATE TABLE processed_operations (
+                        operation_id TEXT(36) PRIMARY KEY,
+                        operation_type TEXT(32) NOT NULL,
+                        request_fingerprint TEXT(64) NOT NULL,
+                        fingerprint_profile TEXT(32) NOT NULL,
+                        processed_at TEXT(24) NOT NULL,
+                        processing_result TEXT NOT NULL
+                    )
+                """)
+                # Insert realistic historical data
+                conn.exec_driver_sql("""
+                    INSERT INTO categories VALUES ('cat-1', 'Ingredients', 'ingredients', NULL, 1, '2026-11-18T02:00:00.000Z', '2026-11-18T02:00:00.000Z')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO inventory_items VALUES ('item-1', 'cat-1', 'Coffee Beans', 'coffee beans', 'piece', 10, 1, '2026-11-18T02:00:00.000Z', '2026-11-18T02:00:00.000Z')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO stock_movements VALUES ('mov-1', 'item-1', 'stock_in', 100, 'Delivery', NULL, '2026-11-18T02:05:00.000Z')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO stock_movements VALUES ('mov-2', 'item-1', 'stock_out', -30, 'Used', NULL, '2026-11-18T03:00:00.000Z')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO stock_batches VALUES ('batch-1', 'item-1', 100, '2026-11-18', NULL, NULL, '2026-11-18T02:05:00.000Z')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO batch_allocations VALUES ('alloc-1', 'mov-1', 'batch-1', 100)
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO batch_allocations VALUES ('alloc-2', 'mov-2', 'batch-1', -30)
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO processed_operations VALUES ('op-1', 'create_category', 'sha256', '1:/api/v1', '2026-11-18T03:01:00.000Z', '{}')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO processed_operations VALUES ('op-2', 'create_item', 'sha256', '1:/api/v1', '2026-11-18T03:01:01.000Z', '{}')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO processed_operations VALUES ('op-3', 'record_stock_movement', 'sha256', '1:/api/v1', '2026-11-18T03:01:02.000Z', '{}')
+                """)
+                conn.exec_driver_sql("""
+                    INSERT INTO processed_operations VALUES ('op-4', 'record_stock_movement', 'sha256', '1:/api/v1', '2026-11-18T03:01:03.000Z', '{}')
+                """)
+                conn.commit()
+
+            # Now init with migration
+            init_db(engine)
+
+            # Verify all historical data preserved
+            with Session(engine) as s:
+                # Column should exist now
+                cols = [c["name"] for c in inspect(engine).get_columns("processed_operations")]
+                self.assertIn("commit_seq", cols)
+                self.assertIn("migration_metadata", cols)
+
+                # All 4 processed operations should exist with provisional commit_seq
+                ops = s.query(ProcessedOperation).all()
+                self.assertEqual(len(ops), 4)
+                for op in ops:
+                    self.assertEqual(op.migration_metadata, "provisional")
+                    self.assertGreater(op.commit_seq, 0)
+
+                # Movements and allocations preserved
+                movs = s.query(Movement).all()
+                self.assertEqual(len(movs), 2)
+                allocs = s.query(Allocation).all()
+                self.assertEqual(len(allocs), 2)
+
+                # Batches preserved
+                batches = s.query(Batch).all()
+                self.assertEqual(len(batches), 1)
+
+            engine.dispose()
+        finally:
+            os.remove(path)
+
+    def test_snapshot_replay_operation_id_differs_from_movement_id(self):
+        """Snapshot replay order must use durable entity_id association, not operation_id."""
+        self.seed()
+        # Create two movements with DIFFERENT operation IDs than movement IDs
+        # and identical timestamps - order must be by commit_seq from ProcessedOperation.entity_id
+        self.sync(200, "record_stock_movement", U(201), {
+            "movement_id": U(201), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 50, "reason": "Delivery A",
+            "allocations": [{"allocation_id": U(202), "batch_id": U(203), "quantity_change": 50}],
+            "new_batches": [{"batch_id": U(203), "received_quantity": 50,
+                             "purchase_date": "2026-11-18"}]
+        }, 3, "2026-11-18T02:00:00.000Z")
+        self.sync(204, "record_stock_movement", U(205), {
+            "movement_id": U(205), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": 30, "reason": "Delivery B",
+            "allocations": [{"allocation_id": U(206), "batch_id": U(207), "quantity_change": 30}],
+            "new_batches": [{"batch_id": U(207), "received_quantity": 30,
+                             "purchase_date": "2026-11-18"}]
+        }, 4, "2026-11-18T02:00:00.000Z")  # same timestamp
+
+        # Verify snapshot has both movements with commit_seq and replay_status
+        s = self.client.get("/api/v1/snapshot").get_json()["data"]
+        movements = s["stock_movements"]
+        self.assertEqual(len(movements), 4)  # 2 from seed + 2 new
+
+        # Find our new movements
+        new_movs = [m for m in movements if m["movement_id"] in (U(201), U(205))]
+        self.assertEqual(len(new_movs), 2)
+
+        # Both must have commit_seq and replay_status
+        for m in new_movs:
+            self.assertIn("commit_seq", m)
+            self.assertIsInstance(m["commit_seq"], int)
+            self.assertGreater(m["commit_seq"], 0)
+            self.assertIn("replay_status", m)
+            self.assertIn(m["replay_status"], ("verified", "provisional"))
+
+        # Order must follow commit_seq
+        seqs = [m["commit_seq"] for m in new_movs]
+        self.assertEqual(seqs, sorted(seqs))
 
 
 if __name__ == "__main__":

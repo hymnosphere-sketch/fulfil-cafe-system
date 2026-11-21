@@ -380,6 +380,7 @@ def process_command(session, now_fn, *, operation_id, operation_type, entity_id,
     commit_seq = _next_commit_seq(session)
     session.add(ProcessedOperation(
         operation_id=operation_id, operation_type=operation_type,
+        entity_id=entity_id,  # durable association: movement_id, item_id, or category_id
         request_fingerprint=fp, fingerprint_profile=PROFILE,
         processed_at=processed_at, processing_result=json.dumps(result),
         commit_seq=commit_seq))
