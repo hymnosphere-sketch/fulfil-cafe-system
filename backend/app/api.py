@@ -459,7 +459,11 @@ def report_movements():
     with scope() as s:
         if item_id:
             svc.get_item(s, item_id)
-        rows = reports.movement_summary(s, item_id, mtype, start, end)
+        try:
+            rows = reports.movement_summary(s, item_id, mtype, start, end)
+        except ApiError as e:
+            # Convert to proper response
+            raise
     page, meta = paginate(rows)
     return ok(page, meta=meta)
 
