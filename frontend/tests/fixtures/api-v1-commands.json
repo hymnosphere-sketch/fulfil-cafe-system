@@ -1,0 +1,422 @@
+{
+  "backendCommit": "76eec40bb5c645bd41b5df501ee8ac9c7ccf5564",
+  "cases": [
+    {
+      "name": "category-create-minimal",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"create_category\",\"payload\":{\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"description\":null,\"name\":\"Café Supplies\"}}",
+      "fingerprint": "f67134e2c60af91a2a813193a40db3cb48b335af4ef9fd75f496d0e690c1e01e"
+    },
+    {
+      "name": "category-create-equivalent-null-cased-ids-timestamp-transport",
+      "valid": true,
+      "command": {"local_sequence": 9007199254740991, "created_at": "2026-11-19T09:00:00.000Z", "payload": {"description": null, "name": "\u001c \tCafé Supplies  ", "category_id": "B09BAC70-10BA-4A11-8E01-000000000001"}, "entity_id": "B09BAC70-10BA-4A11-8E01-000000000001", "operation_type": "create_category", "operation_id": "B09BAC70-10BA-4A11-8E01-000000000101"},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"create_category\",\"payload\":{\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"description\":null,\"name\":\"Café Supplies\"}}",
+      "fingerprint": "f67134e2c60af91a2a813193a40db3cb48b335af4ef9fd75f496d0e690c1e01e"
+    },
+    {
+      "name": "category-create-display-case-changed",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "CAFÉ Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"create_category\",\"payload\":{\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"description\":null,\"name\":\"CAFÉ Supplies\"}}",
+      "fingerprint": "0a11f48dc67f13bd7c57a3fb731c73a8d7115f250d347043bdbc2019aaebddea"
+    },
+    {
+      "name": "category-update-description-omitted",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000102", "operation_type": "update_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"name": "Coffee Stock"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 2},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"update_category\",\"payload\":{\"name\":\"Coffee Stock\"}}",
+      "fingerprint": "3fce17a3fb87bf11b16b9328859cc161544a2e62286047cb5a2123768b549d62"
+    },
+    {
+      "name": "category-update-description-cleared",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000102", "operation_type": "update_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"name": "Coffee Stock", "description": null}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 2},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"update_category\",\"payload\":{\"description\":null,\"name\":\"Coffee Stock\"}}",
+      "fingerprint": "af9ffcbd3320875d8c759678585870c11727c717d15668a3545513c321e177f2"
+    },
+    {
+      "name": "category-update-blank-description-clears",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000102", "operation_type": "update_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"name": "Coffee Stock", "description": " \u001c "}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 2},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"update_category\",\"payload\":{\"description\":null,\"name\":\"Coffee Stock\"}}",
+      "fingerprint": "af9ffcbd3320875d8c759678585870c11727c717d15668a3545513c321e177f2"
+    },
+    {
+      "name": "category-update-description-normalized",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000102", "operation_type": "update_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"name": "Coffee Stock", "description": "  Café  Stock  "}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 2},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"update_category\",\"payload\":{\"description\":\"Café Stock\",\"name\":\"Coffee Stock\"}}",
+      "fingerprint": "49ed765d01226669827848b4a1577b43afa0a599d381cb2f0ec691436f39046b"
+    },
+    {
+      "name": "category-archive-empty",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000103", "operation_type": "archive_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 3},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"operation_type\":\"archive_category\",\"payload\":{}}",
+      "fingerprint": "b0b15c2f262eae8ee2b49e8557b388e7b2fd7136c2817fb0e79fefe843c25c6e"
+    },
+    {
+      "name": "item-create-piece",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": 15}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"operation_type\":\"create_item\",\"payload\":{\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"minimum_stock_level\":15,\"name\":\"Paper Cups\",\"unit_of_measurement\":\"piece\"}}",
+      "fingerprint": "3e5253cc93777e1f611d8d887fa1f2417abe651414927db6c5f6d707c99ad024"
+    },
+    {
+      "name": "item-create-kg-scaled",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "kg", "minimum_stock_level": 1500}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"operation_type\":\"create_item\",\"payload\":{\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"minimum_stock_level\":1500,\"name\":\"Paper Cups\",\"unit_of_measurement\":\"kg\"}}",
+      "fingerprint": "d9bcbc709c4cef006b14e04cd20b5d709f44f575f9555dee095ad2367b81f5f9"
+    },
+    {
+      "name": "item-create-l-scaled",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "l", "minimum_stock_level": 1500}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"operation_type\":\"create_item\",\"payload\":{\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"minimum_stock_level\":1500,\"name\":\"Paper Cups\",\"unit_of_measurement\":\"l\"}}",
+      "fingerprint": "76faed0c6d85cdac4decc2e08eadc944215eea7d82b0d1500ee8d983b7855958"
+    },
+    {
+      "name": "item-update-minimum-only",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000105", "operation_type": "update_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"minimum_stock_level": 0}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 5},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"operation_type\":\"update_item\",\"payload\":{\"minimum_stock_level\":0}}",
+      "fingerprint": "02948f39de7cd3df3aa17e12034323ca965cccaec9131a970114831f03d65f67"
+    },
+    {
+      "name": "item-update-safe-integer-limit",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000106", "operation_type": "update_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"minimum_stock_level": 9007199254740991}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 6},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"operation_type\":\"update_item\",\"payload\":{\"minimum_stock_level\":9007199254740991}}",
+      "fingerprint": "b57dc4e2fd26c4705269e5f35401641cfed298bedc78dead9718b79a658675b6"
+    },
+    {
+      "name": "item-archive-empty",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000107", "operation_type": "archive_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 7},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"operation_type\":\"archive_item\",\"payload\":{}}",
+      "fingerprint": "2106c5728b724af74f0578b265528747974950eea51bbeb627b65d8d0b277b8d"
+    },
+    {
+      "name": "movement-receipt-two-batches",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000108", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000003", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000003", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_in", "quantity_change": 1500, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000007", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": 1000}, {"allocation_id": "b09bac70-10ba-4a11-8e01-000000000006", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "new_batches": [{"batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "received_quantity": 500}, {"batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "received_quantity": 1000, "purchase_date": "2024-02-29", "purchase_cost": 12345, "expiration_date": "2026-12-01"}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 8},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000003\",\"operation_type\":\"record_stock_movement\",\"payload\":{\"allocations\":[{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000006\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"quantity_change\":500},{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000007\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"quantity_change\":1000}],\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"movement_id\":\"b09bac70-10ba-4a11-8e01-000000000003\",\"movement_type\":\"stock_in\",\"new_batches\":[{\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"expiration_date\":\"2026-12-01\",\"purchase_cost\":12345,\"purchase_date\":\"2024-02-29\",\"received_quantity\":1000},{\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"expiration_date\":null,\"purchase_cost\":null,\"purchase_date\":null,\"received_quantity\":500}],\"quantity_change\":1500,\"reason\":null,\"recorded_by\":null}}",
+      "fingerprint": "a403f30aaf4bf7547d2dfc7fcc866a008cc917f57ffbc1750994483705680c80"
+    },
+    {
+      "name": "movement-receipt-equivalent-allocation-order-null-transport",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000199", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000003", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000003", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_in", "quantity_change": 1500, "allocations": [{"allocation_id": "B09BAC70-10BA-4A11-8E01-000000000006", "batch_id": "B09BAC70-10BA-4A11-8E01-000000000005", "quantity_change": 500}, {"allocation_id": "B09BAC70-10BA-4A11-8E01-000000000007", "batch_id": "B09BAC70-10BA-4A11-8E01-000000000004", "quantity_change": 1000}], "new_batches": [{"batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "received_quantity": 1000, "purchase_date": "2024-02-29", "purchase_cost": 12345, "expiration_date": "2026-12-01"}, {"batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "received_quantity": 500, "purchase_cost": null, "purchase_date": null, "expiration_date": null}], "reason": null, "recorded_by": null}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 98},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000003\",\"operation_type\":\"record_stock_movement\",\"payload\":{\"allocations\":[{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000006\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"quantity_change\":500},{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000007\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"quantity_change\":1000}],\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"movement_id\":\"b09bac70-10ba-4a11-8e01-000000000003\",\"movement_type\":\"stock_in\",\"new_batches\":[{\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"expiration_date\":\"2026-12-01\",\"purchase_cost\":12345,\"purchase_date\":\"2024-02-29\",\"received_quantity\":1000},{\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"expiration_date\":null,\"purchase_cost\":null,\"purchase_date\":null,\"received_quantity\":500}],\"quantity_change\":1500,\"reason\":null,\"recorded_by\":null}}",
+      "fingerprint": "a403f30aaf4bf7547d2dfc7fcc866a008cc917f57ffbc1750994483705680c80"
+    },
+    {
+      "name": "movement-receipt-quantity-changed",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000108", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000003", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000003", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_in", "quantity_change": 1501, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000007", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": 1001}, {"allocation_id": "b09bac70-10ba-4a11-8e01-000000000006", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "new_batches": [{"batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "received_quantity": 500}, {"batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "received_quantity": 1001, "purchase_date": "2024-02-29", "purchase_cost": 12345, "expiration_date": "2026-12-01"}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 8},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000003\",\"operation_type\":\"record_stock_movement\",\"payload\":{\"allocations\":[{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000006\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"quantity_change\":500},{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000007\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"quantity_change\":1001}],\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"movement_id\":\"b09bac70-10ba-4a11-8e01-000000000003\",\"movement_type\":\"stock_in\",\"new_batches\":[{\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"expiration_date\":\"2026-12-01\",\"purchase_cost\":12345,\"purchase_date\":\"2024-02-29\",\"received_quantity\":1001},{\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"expiration_date\":null,\"purchase_cost\":null,\"purchase_date\":null,\"received_quantity\":500}],\"quantity_change\":1501,\"reason\":null,\"recorded_by\":null}}",
+      "fingerprint": "345b80beb12916e8f68278e4f545cae83356098837e9f332a982add8d74c9e0f"
+    },
+    {
+      "name": "movement-usage-minimal",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -5, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000008\",\"operation_type\":\"record_stock_movement\",\"payload\":{\"allocations\":[{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000009\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"quantity_change\":-5}],\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"movement_id\":\"b09bac70-10ba-4a11-8e01-000000000008\",\"movement_type\":\"stock_out\",\"new_batches\":[],\"quantity_change\":-5,\"reason\":null,\"recorded_by\":null}}",
+      "fingerprint": "7e3c05c675a59d0646b91aa63b8512daea5b0eda3147e631d7bad61efd965299"
+    },
+    {
+      "name": "movement-usage-empty-batches",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -5, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}], "new_batches": []}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000008\",\"operation_type\":\"record_stock_movement\",\"payload\":{\"allocations\":[{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-000000000009\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000004\",\"quantity_change\":-5}],\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"movement_id\":\"b09bac70-10ba-4a11-8e01-000000000008\",\"movement_type\":\"stock_out\",\"new_batches\":[],\"quantity_change\":-5,\"reason\":null,\"recorded_by\":null}}",
+      "fingerprint": "7e3c05c675a59d0646b91aa63b8512daea5b0eda3147e631d7bad61efd965299"
+    },
+    {
+      "name": "movement-positive-adjustment-reason",
+      "valid": true,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-00000000010a", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-00000000000a", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-00000000000a", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "positive_adjustment", "quantity_change": 500, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-00000000000b", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "reason": " \t Count correction \t"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 10},
+      "canonical": "{\"command_schema_version\":1,\"created_at\":\"2026-11-19T09:00:00.000Z\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-00000000000a\",\"operation_type\":\"record_stock_movement\",\"payload\":{\"allocations\":[{\"allocation_id\":\"b09bac70-10ba-4a11-8e01-00000000000b\",\"batch_id\":\"b09bac70-10ba-4a11-8e01-000000000005\",\"quantity_change\":500}],\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"movement_id\":\"b09bac70-10ba-4a11-8e01-00000000000a\",\"movement_type\":\"positive_adjustment\",\"new_batches\":[],\"quantity_change\":500,\"reason\":\"Count correction\",\"recorded_by\":null}}",
+      "fingerprint": "50c947e2e4b00fdd30bc2575bdd65b396c0b272c0c163a97582268d4ede9c716"
+    },
+    {
+      "name": "reject-extra-transport-key",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1, "wire_version": 1},
+      "pythonStatus": 400,
+      "pythonError": "INVALID_REQUEST",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-unsupported-operation",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "delete_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "UNSUPPORTED_OPERATION"
+    },
+    {
+      "name": "reject-unsupported-unit",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "pieces", "minimum_stock_level": 15}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "UNSUPPORTED_UNIT"
+    },
+    {
+      "name": "reject-extra-unit-scale",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": 15, "scale": 0}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-null-required-name",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": null}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-blank-required-name",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "\u001c 　"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-wrong-category-entity",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-wrong-item-entity",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": 15}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-wrong-movement-entity",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -5, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-patch-without-fields",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000102", "operation_type": "update_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 2},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-archive-with-payload",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-00000000010b", "operation_type": "archive_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"is_active": false}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 11},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-string-stock-minimum",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": "15"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-boolean-stock-minimum",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": true}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-fractional-stock-minimum",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": 1.5}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-unsafe-stock-minimum",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000104", "operation_type": "create_item", "entity_id": "b09bac70-10ba-4a11-8e01-000000000002", "payload": {"item_id": "b09bac70-10ba-4a11-8e01-000000000002", "category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Paper Cups", "unit_of_measurement": "piece", "minimum_stock_level": 9007199254740992}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 4},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-unsafe-local-sequence",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9007199254740992},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-zero-local-sequence",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 0},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-invalid-uuid",
+      "valid": false,
+      "command": {"operation_id": "invalid", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-event-time-offset",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-11-19T09:00:00+00:00", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-impossible-event-date",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000101", "operation_type": "create_category", "entity_id": "b09bac70-10ba-4a11-8e01-000000000001", "payload": {"category_id": "b09bac70-10ba-4a11-8e01-000000000001", "name": "Café Supplies"}, "created_at": "2026-02-29T09:00:00Z", "local_sequence": 1},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-zero-movement-change",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": 0, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "INVALID_QUANTITY",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-wrong-movement-sign",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": 5, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "INVALID_QUANTITY",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-fractional-movement-change",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -2.5, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-unsafe-movement-change",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -9007199254740992, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "INVALID_QUANTITY",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-mismatched-allocation-total",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -6, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "INVALID_BATCH_ALLOCATION",
+      "javascriptError": "INVALID_BATCH_ALLOCATION"
+    },
+    {
+      "name": "reject-duplicate-allocation-batch",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -10, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}, {"allocation_id": "b09bac70-10ba-4a11-8e01-00000000000a", "batch_id": "B09BAC70-10BA-4A11-8E01-000000000004", "quantity_change": -5}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "INVALID_BATCH_ALLOCATION",
+      "javascriptError": "INVALID_BATCH_ALLOCATION"
+    },
+    {
+      "name": "reject-mismatched-new-batch",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000108", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000003", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000003", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_in", "quantity_change": 1500, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000007", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": 1000}, {"allocation_id": "b09bac70-10ba-4a11-8e01-000000000006", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "new_batches": [{"batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "received_quantity": 499}, {"batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "received_quantity": 1000, "purchase_date": "2024-02-29", "purchase_cost": 12345, "expiration_date": "2026-12-01"}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 8},
+      "pythonStatus": 422,
+      "pythonError": "INVALID_BATCH_ALLOCATION",
+      "javascriptError": "INVALID_BATCH_ALLOCATION"
+    },
+    {
+      "name": "reject-impossible-purchase-date",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000108", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000003", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000003", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_in", "quantity_change": 1500, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000007", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": 1000}, {"allocation_id": "b09bac70-10ba-4a11-8e01-000000000006", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "new_batches": [{"batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "received_quantity": 500, "purchase_date": "2026-02-29"}, {"batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "received_quantity": 1000, "purchase_date": "2024-02-29", "purchase_cost": 12345, "expiration_date": "2026-12-01"}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 8},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-negative-purchase-cost",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000108", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000003", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000003", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_in", "quantity_change": 1500, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000007", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": 1000}, {"allocation_id": "b09bac70-10ba-4a11-8e01-000000000006", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "new_batches": [{"batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "received_quantity": 500, "purchase_cost": -1}, {"batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "received_quantity": 1000, "purchase_date": "2024-02-29", "purchase_cost": 12345, "expiration_date": "2026-12-01"}]}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 8},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_QUANTITY"
+    },
+    {
+      "name": "reject-unapproved-staff-attribution",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-000000000109", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-000000000008", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-000000000008", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "stock_out", "quantity_change": -5, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-000000000009", "batch_id": "b09bac70-10ba-4a11-8e01-000000000004", "quantity_change": -5}], "recorded_by": "b09bac70-10ba-4a11-8e01-00000000000c"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 9},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    },
+    {
+      "name": "reject-blank-adjustment-reason",
+      "valid": false,
+      "command": {"operation_id": "b09bac70-10ba-4a11-8e01-00000000010a", "operation_type": "record_stock_movement", "entity_id": "b09bac70-10ba-4a11-8e01-00000000000a", "payload": {"movement_id": "b09bac70-10ba-4a11-8e01-00000000000a", "item_id": "b09bac70-10ba-4a11-8e01-000000000002", "movement_type": "positive_adjustment", "quantity_change": 500, "allocations": [{"allocation_id": "b09bac70-10ba-4a11-8e01-00000000000b", "batch_id": "b09bac70-10ba-4a11-8e01-000000000005", "quantity_change": 500}], "reason": "\u001f"}, "created_at": "2026-11-19T09:00:00Z", "local_sequence": 10},
+      "pythonStatus": 422,
+      "pythonError": "VALIDATION_ERROR",
+      "javascriptError": "INVALID_COMMAND"
+    }
+  ],
+  "normalization": [
+    {"name": "composed-capitalized-name", "input": " Café  Supplies ", "pythonDisplay": "Café Supplies", "pythonNormalized": "café supplies", "javascriptLowercase": "café supplies"},
+    {"name": "decomposed-whitespace-name", "input": "\u001cCafé\tSupplies\u001f", "pythonDisplay": "Café Supplies", "pythonNormalized": "café supplies", "javascriptLowercase": "café supplies"},
+    {"name": "sharp-s-full-casefold", "input": "Straße", "pythonDisplay": "Straße", "pythonNormalized": "strasse", "javascriptLowercase": "straße"},
+    {"name": "ascii-equivalent-of-sharp-s", "input": "STRASSE", "pythonDisplay": "STRASSE", "pythonNormalized": "strasse", "javascriptLowercase": "strasse"},
+    {"name": "greek-final-sigma-full-casefold", "input": "ΟΣ", "pythonDisplay": "ΟΣ", "pythonNormalized": "οσ", "javascriptLowercase": "ος"},
+    {"name": "latin-ligature-full-casefold", "input": "ﬃ Stock", "pythonDisplay": "ﬃ Stock", "pythonNormalized": "ffi stock", "javascriptLowercase": "ﬃ stock"},
+    {"name": "unicode-bom-is-not-python-whitespace", "input": "﻿Stock", "pythonDisplay": "﻿Stock", "pythonNormalized": "﻿stock", "javascriptLowercase": "﻿stock"},
+    {"name": "ascii-separators-inside-text-survive", "input": "\u001cA\u001dB\u001f", "pythonDisplay": "A\u001dB", "pythonNormalized": "a\u001db", "javascriptLowercase": "a\u001db"}
+  ],
+  "serialization": [
+    {"name": "code-point-vs-utf16-key-order", "value": {"😀": "astral", "": "BMP", "a": {"2": 2, "10": 10}}, "canonical": "{\"a\":{\"10\":10,\"2\":2},\"\":\"BMP\",\"😀\":\"astral\"}", "fingerprint": "cc175837b785fdd9a07af9698299f5e2cbc484b6d8d0c8062b0a1b49474cd17d", "utf16KeyOrder": "{\"a\":{\"10\":10,\"2\":2},\"😀\":\"astral\",\"\":\"BMP\"}"},
+    {"name": "utf8-with-control-escapes-and-safe-integers", "value": {"label": "Café 🧋 / \u2028 \u2029", "escaped": "line\n\t\u0000\u001f\"\\", "integer_limits": [-9007199254740991, 0, 9007199254740991], "memo": null}, "canonical": "{\"escaped\":\"line\\n\\t\\u0000\\u001f\\\"\\\\\",\"integer_limits\":[-9007199254740991,0,9007199254740991],\"label\":\"Café 🧋 / \u2028 \u2029\",\"memo\":null}", "fingerprint": "ca2fe95f2d8c4f3d8bb478072cf8a80521168808efb8b31d52ab53a8a1da2a96"}
+  ],
+  "identity": [
+    ["category-create-minimal", "category-create-equivalent-null-cased-ids-timestamp-transport", true],
+    ["category-create-minimal", "category-create-display-case-changed", false],
+    ["category-update-description-omitted", "category-update-description-cleared", false],
+    ["category-update-description-cleared", "category-update-blank-description-clears", true],
+    ["item-create-kg-scaled", "item-create-l-scaled", false],
+    ["movement-receipt-two-batches", "movement-receipt-equivalent-allocation-order-null-transport", true],
+    ["movement-receipt-two-batches", "movement-receipt-quantity-changed", false],
+    ["movement-usage-minimal", "movement-usage-empty-batches", true]
+  ],
+  "rawRejections": [
+    {"name": "reject-duplicate-json-key", "raw": "{\"operation_id\":\"b09bac70-10ba-4a11-8e01-000000000104\",\"operation_type\":\"create_item\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"payload\":{\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"name\":\"Paper Cups\",\"unit_of_measurement\":\"piece\",\"minimum_stock_level\":15,\"minimum_stock_level\":16},\"created_at\":\"2026-11-19T09:00:00Z\",\"local_sequence\":4}", "pythonStatus": 400, "pythonError": "INVALID_REQUEST"},
+    {"name": "reject-decimal-token-in-integer-field", "raw": "{\"operation_id\":\"b09bac70-10ba-4a11-8e01-000000000104\",\"operation_type\":\"create_item\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"payload\":{\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"name\":\"Paper Cups\",\"unit_of_measurement\":\"piece\",\"minimum_stock_level\":15.0},\"created_at\":\"2026-11-19T09:00:00Z\",\"local_sequence\":4}", "pythonStatus": 422, "pythonError": "VALIDATION_ERROR"},
+    {"name": "reject-exponent-token-in-integer-field", "raw": "{\"operation_id\":\"b09bac70-10ba-4a11-8e01-000000000104\",\"operation_type\":\"create_item\",\"entity_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"payload\":{\"item_id\":\"b09bac70-10ba-4a11-8e01-000000000002\",\"category_id\":\"b09bac70-10ba-4a11-8e01-000000000001\",\"name\":\"Paper Cups\",\"unit_of_measurement\":\"piece\",\"minimum_stock_level\":15e0},\"created_at\":\"2026-11-19T09:00:00Z\",\"local_sequence\":4}", "pythonStatus": 422, "pythonError": "VALIDATION_ERROR"}
+  ]
+}
