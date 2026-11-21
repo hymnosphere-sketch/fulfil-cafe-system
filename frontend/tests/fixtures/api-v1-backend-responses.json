@@ -1,0 +1,181 @@
+{
+  "command": {
+    "operation_id": "00000000-0000-0000-0000-0000000003fc",
+    "operation_type": "create_category",
+    "entity_id": "00000000-0000-0000-0000-0000000003fb",
+    "payload": {
+      "category_id": "00000000-0000-0000-0000-0000000003fb",
+      "name": "Review first receipt"
+    },
+    "created_at": "2026-11-19T02:00:00Z",
+    "local_sequence": 1
+  },
+  "original": {
+    "commit": "76eec40bb5c645bd41b5df501ee8ac9c7ccf5564",
+    "accepted": {
+      "data": {
+        "operation_id": "00000000-0000-0000-0000-0000000003fc",
+        "outcome": "accepted",
+        "processed_at": "2026-11-19T03:00:00Z",
+        "result": {
+          "category_id": "00000000-0000-0000-0000-0000000003fb",
+          "created_at": "2026-11-19T02:00:00Z",
+          "description": null,
+          "is_active": true,
+          "name": "Review first receipt",
+          "normalized_name": "review first receipt",
+          "updated_at": "2026-11-19T02:00:00Z"
+        }
+      },
+      "success": true
+    },
+    "replay": {
+      "data": {
+        "operation_id": "00000000-0000-0000-0000-0000000003fc",
+        "outcome": "already_processed",
+        "processed_at": "2026-11-19T03:00:00Z",
+        "result": {
+          "category_id": "00000000-0000-0000-0000-0000000003fb",
+          "created_at": "2026-11-19T02:00:00Z",
+          "description": null,
+          "is_active": true,
+          "name": "Review first receipt",
+          "normalized_name": "review first receipt",
+          "updated_at": "2026-11-19T02:00:00Z"
+        }
+      },
+      "success": true
+    },
+    "snapshot": {
+      "data": {
+        "backup": {
+          "last_successful_backup_at": null
+        },
+        "batch_allocations": [],
+        "categories": [
+          {
+            "category_id": "00000000-0000-0000-0000-0000000003fb",
+            "created_at": "2026-11-19T02:00:00Z",
+            "description": null,
+            "is_active": true,
+            "name": "Review first receipt",
+            "normalized_name": "review first receipt",
+            "updated_at": "2026-11-19T02:00:00Z"
+          },
+          {
+            "category_id": "00000000-0000-0000-0000-0000000003fd",
+            "created_at": "2026-11-19T02:00:00Z",
+            "description": null,
+            "is_active": true,
+            "name": "Review second receipt",
+            "normalized_name": "review second receipt",
+            "updated_at": "2026-11-19T02:00:00Z"
+          }
+        ],
+        "inventory_items": [],
+        "receipt_checks": [],
+        "schema_version": 1,
+        "server_generation_id": "b0f0380a-df54-4de4-a624-8305832d872a",
+        "settings": {
+          "business_timezone": "Asia/Manila",
+          "expiration_warning_days": null,
+          "settings_version": 1
+        },
+        "snapshot_at": "2026-11-19T02:00:00Z",
+        "stock_batches": [],
+        "stock_movements": [],
+        "sync": {
+          "last_committed_at": "2026-11-19T03:00:00Z",
+          "last_committed_operation_id": "00000000-0000-0000-0000-0000000003fc"
+        }
+      },
+      "success": true
+    },
+    "generation": "b0f0380a-df54-4de4-a624-8305832d872a"
+  },
+  "latest": {
+    "commit": "f8a1adf8289119d33d54a1e69a68681e2aec1ae9",
+    "accepted": {
+      "data": {
+        "commit_seq": 1,
+        "operation_id": "00000000-0000-0000-0000-0000000003fc",
+        "outcome": "accepted",
+        "processed_at": "2026-11-19T03:00:00Z",
+        "result": {
+          "category_id": "00000000-0000-0000-0000-0000000003fb",
+          "created_at": "2026-11-19T02:00:00Z",
+          "description": null,
+          "is_active": true,
+          "name": "Review first receipt",
+          "normalized_name": "review first receipt",
+          "updated_at": "2026-11-19T02:00:00Z"
+        }
+      },
+      "success": true
+    },
+    "replay": {
+      "data": {
+        "operation_id": "00000000-0000-0000-0000-0000000003fc",
+        "outcome": "already_processed",
+        "processed_at": "2026-11-19T03:00:00Z",
+        "result": {
+          "category_id": "00000000-0000-0000-0000-0000000003fb",
+          "created_at": "2026-11-19T02:00:00Z",
+          "description": null,
+          "is_active": true,
+          "name": "Review first receipt",
+          "normalized_name": "review first receipt",
+          "updated_at": "2026-11-19T02:00:00Z"
+        }
+      },
+      "success": true
+    },
+    "snapshot": {
+      "data": {
+        "backup": {
+          "last_successful_backup_at": null
+        },
+        "batch_allocations": [],
+        "categories": [
+          {
+            "category_id": "00000000-0000-0000-0000-0000000003fb",
+            "created_at": "2026-11-19T02:00:00Z",
+            "description": null,
+            "is_active": true,
+            "name": "Review first receipt",
+            "normalized_name": "review first receipt",
+            "updated_at": "2026-11-19T02:00:00Z"
+          },
+          {
+            "category_id": "00000000-0000-0000-0000-0000000003fd",
+            "created_at": "2026-11-19T02:00:00Z",
+            "description": null,
+            "is_active": true,
+            "name": "Review second receipt",
+            "normalized_name": "review second receipt",
+            "updated_at": "2026-11-19T02:00:00Z"
+          }
+        ],
+        "inventory_items": [],
+        "receipt_checks": [],
+        "schema_version": 1,
+        "server_generation_id": "2ad9a527-f5cd-4495-8434-e3e7db217e5a",
+        "settings": {
+          "business_timezone": "Asia/Manila",
+          "expiration_warning_days": null,
+          "settings_version": 1
+        },
+        "snapshot_at": "2026-11-19T02:00:00Z",
+        "stock_batches": [],
+        "stock_movements": [],
+        "sync": {
+          "last_commit_seq": 2,
+          "last_committed_at": "2026-11-19T02:00:00Z",
+          "last_committed_operation_id": "00000000-0000-0000-0000-0000000003fe"
+        }
+      },
+      "success": true
+    },
+    "generation": "2ad9a527-f5cd-4495-8434-e3e7db217e5a"
+  }
+}
