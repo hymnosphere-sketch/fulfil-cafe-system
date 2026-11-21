@@ -59,6 +59,11 @@ def _migrate_commit_seq(engine):
         inspector = inspect(conn)
         cols = [c["name"] for c in inspector.get_columns("processed_operations")]
 
+        # Add entity_id column if missing (old schema)
+        if "entity_id" not in cols:
+            conn.exec_driver_sql("ALTER TABLE processed_operations ADD COLUMN entity_id TEXT(36)")
+            conn.commit()
+
         if "commit_seq" not in cols:
             # Column missing - add it with default 0
             conn.exec_driver_sql("ALTER TABLE processed_operations ADD COLUMN commit_seq INTEGER DEFAULT 0")

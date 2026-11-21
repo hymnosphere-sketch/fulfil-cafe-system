@@ -57,10 +57,15 @@ class ContractCase(unittest.TestCase):
                                 headers={"X-Inventory-Generation": self.gen})
 
     def seed(self):
-        """Seed minimal data for tests that need it."""
+        """Seed minimal data for tests that need it (with initial stock)."""
         self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z")
         self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z")
         self.sync(33, "record_stock_movement", U(4), self.STOCK_IN, 3, "2026-11-18T02:05:00Z")
+
+    def seed_empty(self):
+        """Seed minimal data WITHOUT initial stock for boundary tests."""
+        self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z")
+        self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z")
 
     CREATE_CAT = {"category_id": CAT, "name": "Ingredients"}
     CREATE_ITEM = {"item_id": ITEM, "category_id": CAT, "name": "Coffee Beans",
@@ -385,18 +390,27 @@ class RegressionTests(ContractCase):
 
     def test_report_aggregates_bounds(self):
         """Report movement_summary must reject aggregates exceeding MAX_SAFE."""
-        self.seed()
+        self.seed_empty()
         from app.core.algorithms import MAX_SAFE
-        huge = MAX_SAFE
-        big = {
+        # Use two movements that together exceed MAX_SAFE
+        half = MAX_SAFE // 2 + 1  # each half is slightly more than half
+        first = {
             "movement_id": U(101), "item_id": ITEM, "movement_type": "stock_in",
-            "quantity_change": huge, "reason": "Delivery",
-            "allocations": [{"allocation_id": U(102), "batch_id": U(103), "quantity_change": huge}],
-            "new_batches": [{"batch_id": U(103), "received_quantity": huge,
+            "quantity_change": half, "reason": "Delivery 1",
+            "allocations": [{"allocation_id": U(102), "batch_id": U(103), "quantity_change": half}],
+            "new_batches": [{"batch_id": U(103), "received_quantity": half,
                              "purchase_date": "2026-11-18"}]
         }
-        self.sync(92, "record_stock_movement", U(101), big, 3, "2026-11-18T02:00:00Z")
-        # Report should reject aggregate
+        second = {
+            "movement_id": U(104), "item_id": ITEM, "movement_type": "stock_in",
+            "quantity_change": half, "reason": "Delivery 2",
+            "allocations": [{"allocation_id": U(105), "batch_id": U(106), "quantity_change": half}],
+            "new_batches": [{"batch_id": U(106), "received_quantity": half,
+                             "purchase_date": "2026-11-18"}]
+        }
+        self.sync(92, "record_stock_movement", U(101), first, 3, "2026-11-18T02:00:00Z")
+        self.sync(93, "record_stock_movement", U(104), second, 4, "2026-11-18T02:05:00Z")
+        # Report should reject aggregate (sum exceeds MAX_SAFE)
         r = self.client.get(f"/api/v1/reports/stock-movements?item_id={ITEM}")
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
@@ -491,7 +505,7 @@ class RegressionTests(ContractCase):
 
     def test_rollback_integrity_across_tables(self):
         """Failed validation must roll back ALL tables (movements, allocations, batches, receipts)."""
-        self.seed()
+        self.seed_empty()
         # Attempt a movement that will fail batch balance validation
         # First add valid stock
         self.sync(100, "record_stock_movement", U(104), {
@@ -518,7 +532,7 @@ class RegressionTests(ContractCase):
 
     def test_max_safe_integer_then_rejected(self):
         """Receiving MAX_SAFE then 2 more must reject and leave no new records."""
-        self.seed()
+        self.seed_empty()
         from app.core.algorithms import MAX_SAFE
 
         # First receipt: MAX_SAFE
@@ -719,7 +733,7 @@ class RegressionTests(ContractCase):
 
     def test_snapshot_replay_operation_id_differs_from_movement_id(self):
         """Snapshot replay order must use durable entity_id association, not operation_id."""
-        self.seed()
+        self.run_examples_a_to_d()
         # Create two movements with DIFFERENT operation IDs than movement IDs
         # and identical timestamps - order must be by commit_seq from ProcessedOperation.entity_id
         self.sync(200, "record_stock_movement", U(201), {
@@ -740,7 +754,7 @@ class RegressionTests(ContractCase):
         # Verify snapshot has both movements with commit_seq and replay_status
         s = self.client.get("/api/v1/snapshot").get_json()["data"]
         movements = s["stock_movements"]
-        self.assertEqual(len(movements), 4)  # 2 from seed + 2 new
+        self.assertEqual(len(movements), 4)  # 2 from run_examples_a_to_d + 2 new
 
         # Find our new movements
         new_movs = [m for m in movements if m["movement_id"] in (U(201), U(205))]
