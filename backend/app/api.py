@@ -460,7 +460,6 @@ def report_movements():
         if item_id:
             svc.get_item(s, item_id)
         rows = reports.movement_summary(s, item_id, mtype, start, end)
-        reports.validate_report_aggregates(rows)
     page, meta = paginate(rows)
     return ok(page, meta=meta)
 

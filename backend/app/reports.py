@@ -89,7 +89,9 @@ def movement_summary(session, item_id, movement_type, start, end):
     rows = [{"item_id": m.item_id, "unit_of_measurement": unit,
              "movement_type": m.movement_type, "quantity_change": m.quantity_change}
             for m, unit in session.execute(q).all()]
-    return alg.aggregate_movements(rows)
+    result = alg.aggregate_movements(rows)
+    validate_report_aggregates(result)
+    return result
 
 
 def validate_report_aggregates(rows):
