@@ -1,4 +1,5 @@
 import { renderCard } from '../components/card.js'
+import { renderSyncPanel } from '../components/sync-status.js'
 import { describeStorage, renderStorageNotice } from '../components/local-storage-status.js'
 import { renderPageHeader } from '../components/page-header.js'
 import { demoBusinessDate } from '../data/demo-inventory.js'
@@ -53,7 +54,6 @@ export function renderSettings(storage) {
         content: `
           <dl class="local-data__details">
             ${detail('Queued fictional operations', count, 'data-settings-queue-count')}
-            ${detail('Synchronization', 'Sync not configured')}
             ${detail('Backups', 'Unavailable')}
           </dl>
           ${isolated ? '' : `
@@ -63,5 +63,6 @@ export function renderSettings(storage) {
         `,
       })}
     </div>
+    <div class="mt-4">${renderSyncPanel()}</div>
   `
 }

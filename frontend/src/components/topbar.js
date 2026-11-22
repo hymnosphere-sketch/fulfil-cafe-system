@@ -1,4 +1,4 @@
-import { renderBadge } from './status.js'
+import { renderSyncBadge } from './sync-status.js'
 import { describeStorage } from './local-storage-status.js'
 
 export function renderTopbar() {
@@ -27,7 +27,7 @@ export function renderTopbar() {
           <i data-lucide="package" aria-hidden="true"></i>
           <span data-storage-status-label>Opening local storage</span>
         </span>
-        ${renderBadge({ tone: 'disabled', icon: 'refresh-cw', label: 'Sync not configured' })}
+        ${renderSyncBadge()}
         <span class="preview-label">Development Preview</span>
       </div>
     </header>

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Synchronization status preview | Fulfil Cafe</title>
+</head>
+<body class="cafe-theme">
+  <main class="container showcase-container preview-main gap-4" id="sync-preview" hidden>
+    <header>
+      <p class="preview-label d-inline-block mb-2">Development Preview</p>
+      <h1>Synchronization status</h1>
+      <p class="cafe-muted mb-0">Inspect a disposable queue. Fixture sync uses fictional responses and makes no API requests.</p>
+    </header>
+
+    <section class="card cafe-card" aria-labelledby="preview-controls-title">
+      <div class="card-body">
+        <h2 id="preview-controls-title">Test queue</h2>
+        <form class="d-grid gap-3" data-preview-form>
+          <div>
+            <label class="form-label" for="queue-name">Queue name</label>
+            <input class="form-control" id="queue-name" name="queue" autocomplete="off" maxlength="120">
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-primary" type="submit">Refresh status</button>
+            <button class="btn btn-outline-primary" type="button" data-create-fixture>Create fictional queue</button>
+          </div>
+          <div>
+            <label class="form-label" for="fixture-outcome">Fixture outcome</label>
+            <select class="form-select" id="fixture-outcome">
+              <option value="accepted">All changes confirmed</option>
+              <option value="retry">Retry delay</option>
+              <option value="temporary">Temporary failure</option>
+              <option value="rejected">Rejected change</option>
+              <option value="recovery">Recovery required</option>
+            </select>
+          </div>
+          <div>
+            <button class="btn btn-primary" type="button" data-run-fixture disabled>Run fixture sync</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <div class="app-topbar app-topbar__statuses" aria-label="Topbar status preview">
+      <span class="badge cafe-badge" data-preview-connectivity></span>
+      <span data-preview-badge></span>
+    </div>
+    <div data-preview-summary></div>
+    <div data-preview-panel></div>
+    <p class="visually-hidden" role="status" data-preview-announcement></p>
+  </main>
+  <script type="module" src="./fe09e-preview.mjs"></script>
+</body>
+</html>

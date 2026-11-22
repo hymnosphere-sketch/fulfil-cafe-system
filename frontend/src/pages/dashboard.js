@@ -1,4 +1,5 @@
 import { renderCard } from '../components/card.js'
+import { renderSyncSummary } from '../components/sync-status.js'
 import { renderMetricCard } from '../components/metric-card.js'
 import { renderPageHeader } from '../components/page-header.js'
 import { renderBadge, renderMessage } from '../components/status.js'
@@ -197,6 +198,7 @@ export function renderDashboard() {
         title: 'Dashboard',
         description: 'Review the demo inventory, stock requiring attention, and recent movements.',
       })}
+      ${renderSyncSummary()}
       <p class="visually-hidden" role="status" data-dashboard-announcement></p>
       <div class="dashboard-results" data-dashboard-results aria-busy="true">
         <div class="dashboard-state">
