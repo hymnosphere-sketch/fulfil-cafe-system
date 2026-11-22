@@ -5,7 +5,7 @@ database (does the category exist? is there enough stock?) live in the
 services. Every function returns a cleaned payload and raises ApiError.
 """
 from .canonical import norm_uuid
-from .errors import validation_error
+from .errors import ApiError, validation_error
 from .normalize import display_name, normalize_name
 from .quantities import MAX_SAFE, check_safe, is_json_integer, scale_for
 from .timeutil import parse_date
@@ -45,8 +45,12 @@ def _only(payload, allowed, required=()):
         raise validation_error({k: "This field is required." for k in missing})
 
 
+def _is_text(value):
+    return isinstance(value, str) and not any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+
+
 def _name(value, field="name"):
-    if not isinstance(value, str):
+    if not _is_text(value):
         raise validation_error({field: "Enter a name."})
     cleaned = display_name(value)
     if not cleaned or not normalize_name(cleaned):
@@ -76,7 +80,7 @@ def _movement_quantity(value, field, *, positive_only=False):
 def _text_or_null(value, field):
     if value is None:
         return None
-    if not isinstance(value, str):
+    if not _is_text(value):
         raise validation_error({field: "Must be text or null."})
     return display_name(value) or None
 
@@ -181,17 +185,21 @@ def record_stock_movement(p):
     allocs = p["allocations"]
     if not isinstance(allocs, list) or not allocs:
         raise validation_error({"allocations": "Supply at least one allocation."})
-    clean_allocs, seen_batches = [], set()
+    clean_allocs, allocations_by_batch, seen_allocations = [], {}, set()
     for a in allocs:
         _only(a, ("allocation_id", "batch_id", "quantity_change"),
               ("allocation_id", "batch_id", "quantity_change"))
         aq = _movement_quantity(a["quantity_change"], "allocations.quantity_change")
+        allocation_id = norm_uuid(a["allocation_id"], "allocations.allocation_id")
+        if allocation_id in seen_allocations:
+            raise ApiError("RESOURCE_CONFLICT", "An allocation ID appears more than once.", 409)
+        seen_allocations.add(allocation_id)
         batch_id = norm_uuid(a["batch_id"], "allocations.batch_id")
-        if batch_id in seen_batches:
+        if batch_id in allocations_by_batch:
             raise ApiErrorAlloc("Each batch may appear only once per movement.")
-        seen_batches.add(batch_id)
+        allocations_by_batch[batch_id] = aq
         clean_allocs.append(
-            {"allocation_id": norm_uuid(a["allocation_id"], "allocations.allocation_id"),
+            {"allocation_id": allocation_id,
              "batch_id": batch_id, "quantity_change": aq}
         )
     if sum(a["quantity_change"] for a in clean_allocs) != qty:
@@ -223,17 +231,16 @@ def record_stock_movement(p):
         if b.get("purchase_cost") is not None:
             nb["purchase_cost"] = check_safe(b["purchase_cost"], "purchase_cost", nonnegative=True)
         clean_new.append(nb)
-    if not set(seen_new) <= seen_batches:
+    if not seen_new <= allocations_by_batch.keys():
         raise ApiErrorAlloc("Every new batch needs a matching allocation.")
     if mtype not in POSITIVE_TYPES and clean_new:
         raise ApiErrorAlloc("Only incoming movements can create batches.")
     # Positive-type movements may only allocate to batches created by this movement
     # (existing-batch positive adjustments are a pending business rule).
-    if mtype in ("initial_stock", "stock_in") and seen_batches != seen_new:
+    if mtype in ("initial_stock", "stock_in") and allocations_by_batch.keys() != seen_new:
         raise ApiErrorAlloc("Incoming stock must create its batch in new_batches.")
     for nb in clean_new:
-        got = next(a for a in clean_allocs if a["batch_id"] == nb["batch_id"])
-        if got["quantity_change"] != nb["received_quantity"]:
+        if allocations_by_batch[nb["batch_id"]] != nb["received_quantity"]:
             raise ApiErrorAlloc("A new batch's allocation must equal its received quantity.")
 
     out = {
@@ -247,9 +254,6 @@ def record_stock_movement(p):
         "new_batches": sorted(clean_new, key=lambda b: b["batch_id"]),
     }
     return out
-
-
-from .errors import ApiError  # noqa: E402  (kept at bottom to keep helpers readable)
 
 
 def ApiErrorQty(message):
@@ -272,6 +276,6 @@ VALIDATORS = {
 
 
 def validate_payload(operation_type, payload):
-    if operation_type not in VALIDATORS:
+    if not isinstance(operation_type, str) or operation_type not in VALIDATORS:
         raise validation_error({"operation_type": "Unsupported operation type."})
     return VALIDATORS[operation_type](payload)

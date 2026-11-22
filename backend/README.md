@@ -21,15 +21,14 @@ database file is created in `backend/instance/`. Stop with `Ctrl + C`.
 
 `requirements.txt` includes `tzdata`: Windows has no time-zone database, and the
 dashboard/expiry reports need `Asia/Manila`. If you already created the venv,
-run `pip install -r requirements.txt` again. If you have an older
-`instance/fulfil_dev.db` (fictional data only), delete it once so the new
-database checks (movement sign/type/reason, indexes) are created; there is no
-migration tool yet.
+run `pip install -r requirements.txt` again. Keep existing database files.
+Use a disposable copy and verify it before applying the receipt migration to
+any retained dataset. See [integrity remediation](INTEGRITY_REMEDIATION.md).
 
 ## Run the tests
 
 ```bat
-python -m unittest -v
+python -m unittest discover -s tests -t . -v
 ```
 
 `tests/test_core.py` needs nothing installed. `tests/test_api.py` needs
@@ -51,13 +50,25 @@ python -m unittest -v
 
 ### The idempotency idea (explain this in your defense)
 
-Every queued tablet command has an `operation_id`. `process_command` first
-looks for a **receipt** with that ID. If one exists and the command's
-fingerprint matches, it returns the original result and changes nothing
-(`already_processed`). If the fingerprint differs it returns `409
-OPERATION_ID_CONFLICT`. Otherwise it applies the change and saves the receipt
-**in the same SQLite transaction**, so a crash can never leave a stock change
-without its receipt (or the reverse). `BEGIN IMMEDIATE` serializes writers.
+Every queued tablet command has an `operation_id`. `process_command` verifies
+stock history in its write transaction, then looks for a **receipt** with that ID. If one exists and the command's
+fingerprint matches and the receipt and ledger checks pass, it returns the
+original result and changes nothing (`already_processed`). A different
+command under a valid existing operation ID returns `409 OPERATION_ID_CONFLICT`.
+A new operation saves the inventory change, receipt evidence, and committed
+sequence watermark in one SQLite transaction. `BEGIN IMMEDIATE` serializes
+writers. Damaged history returns `409 RECOVERY_REQUIRED` without reapplying
+the command.
+
+Stock-dependent reads verify the same ledger inside one read transaction.
+That includes stock reports, movement history, and both snapshots. A missing
+allocation or a contradictory receipt blocks the read with
+`409 RECOVERY_REQUIRED`. Valid snapshots report the same v1 fields as before.
+For the proposed v2 contract, coherent legacy history returns
+`200` with provisional, non-installable metadata. The verifier checks the later
+operations with canonical evidence in commit order. See
+[Integrity remediation](INTEGRITY_REMEDIATION.md) for the response table and
+protected recovery requirements.
 
 ## Endpoints (API_CONTRACT sections 4-10)
 
@@ -93,5 +104,10 @@ code works; each is a one-place change.
 
 - No authentication or permissions yet (BE-09); do not expose beyond localhost.
 - No backup/restore routes (BE-10) and no recovery tooling beyond `/snapshot`.
-- No migrations tool; tables are created on first start (`create_all`).
-- Reports load all items in memory, fine for one café, not for huge data.
+- Startup migrates the known SQLite receipt layouts. Pre-C3 history remains
+  provisional because historical completeness cannot be independently proven.
+  A protected restore and an authorized recovery workflow are still pending.
+- The draft `/api/v2` receipt and snapshot contract is isolated from the pinned
+  `/api/v1` frontend contract. Neither version enables connected initialization.
+- Stock-dependent requests verify the retained ledger in memory on each request.
+  The design targets one café and does not cache integrity results.

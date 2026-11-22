@@ -6,13 +6,17 @@ The remaining tests cover the contract rules that were missing or wrong:
 INSUFFICIENT_STOCK details, INVALID_QUANTITY, 503 SYNC_FAILED, row-level
 database checks and read requests that must not wait for a writer.
 """
+from contextlib import closing
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
 from sqlalchemy import inspect
+
+from app.core.quantities import MAX_SAFE
 
 try:
     import sqlalchemy  # noqa: F401
@@ -50,22 +54,32 @@ class ContractCase(unittest.TestCase):
         self.app.extensions["engine"].dispose()
         os.remove(self.path)
 
-    def sync(self, op, typ, entity, payload, seq, created):
+    def sync(self, op, typ, entity, payload, seq, created, version=1):
         body = {"operation_id": U(op), "operation_type": typ, "entity_id": entity,
                 "payload": payload, "created_at": created, "local_sequence": seq}
-        return self.client.post("/api/v1/sync", json=body,
+        return self.client.post(f"/api/v{version}/sync", json=body,
                                 headers={"X-Inventory-Generation": self.gen})
+
+    def assert_accepted(self, response):
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.get_json()["data"]["outcome"], "accepted")
+        return response.get_json()["data"]
+
+    def v2_snapshot(self):
+        response = self.client.get("/api/v2/snapshot")
+        self.assertEqual(response.status_code, 200, response.get_json())
+        return response.get_json()["data"]
 
     def seed(self):
         """Seed minimal data for tests that need it (with initial stock)."""
-        self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z")
-        self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z")
-        self.sync(33, "record_stock_movement", U(4), self.STOCK_IN, 3, "2026-11-18T02:05:00Z")
+        self.seed_empty()
+        self.assert_accepted(self.sync(33, "record_stock_movement", U(4), self.STOCK_IN, 3,
+                                      "2026-11-18T02:05:00Z"))
 
     def seed_empty(self):
         """Seed minimal data WITHOUT initial stock for boundary tests."""
-        self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z")
-        self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z")
+        self.assert_accepted(self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z"))
+        self.assert_accepted(self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z"))
 
     CREATE_CAT = {"category_id": CAT, "name": "Ingredients"}
     CREATE_ITEM = {"item_id": ITEM, "category_id": CAT, "name": "Coffee Beans",
@@ -90,6 +104,8 @@ class ContractCase(unittest.TestCase):
                       "2026-11-18T02:02:00Z")
         c = self.sync(33, "record_stock_movement", U(4), self.STOCK_IN, 43, "2026-11-18T02:05:00Z")
         d = self.sync(34, "record_stock_movement", U(6), self.STOCK_OUT, 44, "2026-11-18T03:00:00Z")
+        for response in (a, b, c, d):
+            self.assert_accepted(response)
         return a, b, c, d
 
 
@@ -222,8 +238,28 @@ class DatabaseChecks(ContractCase):
     """DATABASE_DESIGN section 7: row-level checks and restrictive foreign keys."""
 
     def seed(self):
-        self.sync(40, "create_category", CAT, self.CREATE_CAT, 1, "2026-11-18T02:00:00Z")
-        self.sync(31, "create_item", ITEM, self.CREATE_ITEM, 2, "2026-11-18T02:00:00Z")
+        self.seed_empty()
+        with self.app.extensions["engine"].connect() as conn:
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT category_id FROM categories"
+            ).all(), [(CAT,)])
+            self.assertEqual(conn.exec_driver_sql(
+                "SELECT item_id, category_id FROM inventory_items"
+            ).all(), [(ITEM, CAT)])
+
+    def records(self):
+        with self.app.extensions["engine"].connect() as conn:
+            return {table: conn.exec_driver_sql(f"SELECT * FROM {table} ORDER BY 1").all()
+                    for table in ("categories", "inventory_items", "stock_batches", "stock_movements",
+                                  "batch_allocations", "processed_operations", "receipt_ledger_head")}
+
+    def assert_movement_check(self, name, movement_type, quantity):
+        from sqlalchemy.exc import IntegrityError
+        self.seed()
+        before = self.records()
+        with self.assertRaisesRegex(IntegrityError, rf"CHECK constraint failed: {name}\b"):
+            self.insert_movement(movement_type, quantity)
+        self.assertEqual(self.records(), before)
 
     def insert_movement(self, mtype, qty, reason=None):
         from app.models import Movement
@@ -235,29 +271,22 @@ class DatabaseChecks(ContractCase):
             s.commit()
 
     def test_sign_must_match_type(self):
-        from sqlalchemy.exc import IntegrityError
-        self.seed()
-        with self.assertRaises(IntegrityError):
-            self.insert_movement("stock_out", 5)
+        self.assert_movement_check("ck_movement_sign", "stock_out", 5)
 
     def test_unknown_type_rejected(self):
-        from sqlalchemy.exc import IntegrityError
-        self.seed()
-        with self.assertRaises(IntegrityError):
-            self.insert_movement("teleport", 5)
+        self.assert_movement_check("ck_movement_type", "teleport", 5)
 
     def test_reason_required_for_wastage(self):
-        from sqlalchemy.exc import IntegrityError
-        self.seed()
-        with self.assertRaises(IntegrityError):
-            self.insert_movement("wastage", -5)
+        self.assert_movement_check("ck_movement_reason", "wastage", -5)
 
     def test_referenced_category_cannot_be_deleted(self):
         from sqlalchemy.exc import IntegrityError
         self.seed()
+        before = self.records()
         with self.app.extensions["engine"].begin() as conn:
-            with self.assertRaises(IntegrityError):
+            with self.assertRaisesRegex(IntegrityError, "FOREIGN KEY constraint failed"):
                 conn.exec_driver_sql("DELETE FROM categories")
+        self.assertEqual(self.records(), before)
 
 
 class StartupChecks(unittest.TestCase):
@@ -280,23 +309,20 @@ class RegressionTests(ContractCase):
 
     # --- Issue 1: commit_seq returned on replay ---
     def test_replay_returns_commit_seq(self):
-        """PR #18: already_processed must include commit_seq for contract compatibility."""
-        self.run_examples_a_to_d()
-        first = self.sync(34, "record_stock_movement", U(6), self.STOCK_OUT, 44,
-                          "2026-11-18T03:00:00Z").get_json()["data"]
-        again = self.sync(34, "record_stock_movement", U(6), self.STOCK_OUT, 44,
-                          "2026-11-18T03:00:00Z").get_json()["data"]
-        self.assertEqual(again["outcome"], "already_processed")
-        self.assertIn("commit_seq", again)
-        self.assertEqual(again["commit_seq"], first["commit_seq"])
-        self.assertIsInstance(again["commit_seq"], int)
-        self.assertGreater(again["commit_seq"], 0)
+        """A v2 retry retains the acceptance's original receipt and sequence."""
+        self.seed()
+        request = (34, "record_stock_movement", U(6), self.STOCK_OUT, 44, "2026-11-18T03:00:00Z")
+        first = self.assert_accepted(self.sync(*request, version=2))
+        replay = self.sync(*request, version=2)
+        self.assertEqual(replay.status_code, 200, replay.get_json())
+        self.assertEqual(replay.get_json()["data"], {**first, "outcome": "already_processed"})
+        self.assertEqual(first["commit_seq"], 4)
 
     # --- Issue 2: Snapshot replay order by commit_seq ---
     def test_snapshot_movements_ordered_by_commit_seq(self):
         """Snapshot must expose authoritative server-assigned replay order."""
         self.run_examples_a_to_d()
-        s = self.client.get("/api/v1/snapshot").get_json()["data"]
+        s = self.v2_snapshot()
         self.assertEqual(s["schema_version"], 2)  # versioned contract
         movements = s["stock_movements"]
         self.assertEqual(len(movements), 2)
@@ -313,20 +339,23 @@ class RegressionTests(ContractCase):
         """Equal or backward timestamps must not reorder movements."""
         self.seed()
         # Create two movements with identical timestamps
-        self.sync(80, "record_stock_movement", U(80), {
-            "movement_id": U(80), "item_id": ITEM, "movement_type": "stock_in",
+        incoming = self.sync(80, "record_stock_movement", U(90), {
+            "movement_id": U(90), "item_id": ITEM, "movement_type": "stock_in",
             "quantity_change": 100, "reason": "Delivery",
             "allocations": [{"allocation_id": U(81), "batch_id": U(82), "quantity_change": 100}],
             "new_batches": [{"batch_id": U(82), "received_quantity": 100,
                              "purchase_date": "2026-11-18"}]
         }, 3, "2026-11-18T02:00:00.000Z")
-        self.sync(81, "record_stock_movement", U(83), {
+        outgoing = self.sync(81, "record_stock_movement", U(83), {
             "movement_id": U(83), "item_id": ITEM, "movement_type": "stock_out",
             "quantity_change": -50, "reason": "Used",
             "allocations": [{"allocation_id": U(84), "batch_id": U(82), "quantity_change": -50}]
         }, 4, "2026-11-18T02:00:00.000Z")  # same timestamp
-        s = self.client.get("/api/v1/snapshot").get_json()["data"]
+        self.assert_accepted(incoming)
+        self.assert_accepted(outgoing)
+        s = self.v2_snapshot()
         movements = s["stock_movements"]
+        self.assertEqual([m["movement_id"] for m in movements], [U(4), U(90), U(83)])
         # Must be ordered by commit_seq, not timestamp tie-breaker
         seqs = [m["commit_seq"] for m in movements]
         self.assertEqual(seqs, sorted(seqs))
@@ -350,70 +379,125 @@ class RegressionTests(ContractCase):
         self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
 
     def test_unsafe_batch_balance_rejected(self):
-        """Batch balance exceeding MAX_SAFE must be rejected."""
-        self.seed()
-        from app.core.algorithms import MAX_SAFE
+        """An overflowing batch is caught before the derived item-total check."""
+        self.seed_empty()
         huge = MAX_SAFE
         big = {
             "movement_id": U(93), "item_id": ITEM, "movement_type": "stock_in",
-            "quantity_change": huge, "reason": "Delivery",
+            "quantity_change": huge,
             "allocations": [{"allocation_id": U(94), "batch_id": U(95), "quantity_change": huge}],
-            "new_batches": [{"batch_id": U(95), "received_quantity": huge,
-                             "purchase_date": "2026-11-18"}]
+            "new_batches": [{"batch_id": U(95), "received_quantity": huge}],
         }
-        r = self.sync(89, "record_stock_movement", U(93), big, 3, "2026-11-18T02:00:00Z")
-        self.assertEqual(r.status_code, 422)
-        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+        self.assert_accepted(self.sync(89, "record_stock_movement", U(93), big, 3, "2026-11-18T02:00:00Z"))
+        batch = self.client.get(f"/api/v1/batches/{U(95)}")
+        self.assertEqual(batch.status_code, 200, batch.get_json())
+        self.assertEqual(batch.get_json()["data"]["remaining_quantity"], MAX_SAFE)
+        before = self.stock_rows()
+        adjustment = {
+            "movement_id": U(96), "item_id": ITEM, "movement_type": "positive_adjustment",
+            "quantity_change": 1, "reason": "Correction",
+            "allocations": [{"allocation_id": U(97), "batch_id": U(95), "quantity_change": 1}],
+        }
+        response = self.sync(90, "record_stock_movement", U(96), adjustment, 4, "2026-11-18T03:00:00Z")
+        self.assert_batch_overflow(response, before)
 
     def test_positive_adjustment_bounds(self):
-        """Positive adjustment must respect safe integer bounds."""
-        self.seed()
-        from app.core.algorithms import MAX_SAFE
-        # First add some stock
-        self.sync(90, "record_stock_movement", U(96), {
+        """An accepted adjustment may reach MAX_SAFE, and the next unit is rejected."""
+        self.seed_empty()
+        start = MAX_SAFE - 2
+        incoming = {
             "movement_id": U(96), "item_id": ITEM, "movement_type": "stock_in",
-            "quantity_change": 1000, "reason": "Delivery",
-            "allocations": [{"allocation_id": U(97), "batch_id": U(98), "quantity_change": 1000}],
-            "new_batches": [{"batch_id": U(98), "received_quantity": 1000,
-                             "purchase_date": "2026-11-18"}]
-        }, 3, "2026-11-18T02:00:00Z")
-        # Then try positive adjustment that overflows
-        huge = MAX_SAFE - 1000
-        adj = {
-            "movement_id": U(99), "item_id": ITEM, "movement_type": "positive_adjustment",
-            "quantity_change": huge, "reason": "Correction",
-            "allocations": [{"allocation_id": U(100), "batch_id": U(98), "quantity_change": huge}]
+            "quantity_change": start,
+            "allocations": [{"allocation_id": U(97), "batch_id": U(98), "quantity_change": start}],
+            "new_batches": [{"batch_id": U(98), "received_quantity": start}],
         }
-        r = self.sync(91, "record_stock_movement", U(99), adj, 4, "2026-11-18T03:00:00Z")
-        self.assertEqual(r.status_code, 422)
-        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+        entered = self.sync(90, "record_stock_movement", U(96), incoming, 3, "2026-11-18T02:00:00Z")
+        self.assert_accepted(entered)
+        at_maximum = {
+            "movement_id": U(99), "item_id": ITEM, "movement_type": "positive_adjustment",
+            "quantity_change": 2, "reason": "Correction",
+            "allocations": [{"allocation_id": U(100), "batch_id": U(98), "quantity_change": 2}],
+        }
+        self.assert_accepted(self.sync(91, "record_stock_movement", U(99), at_maximum, 4,
+                                       "2026-11-18T03:00:00Z"))
+        batch = self.client.get(f"/api/v1/batches/{U(98)}")
+        self.assertEqual(batch.status_code, 200, batch.get_json())
+        self.assertEqual(batch.get_json()["data"]["remaining_quantity"], MAX_SAFE)
+        before = self.stock_rows()
+        excess = {**at_maximum, "movement_id": U(110), "quantity_change": 1,
+                  "allocations": [{"allocation_id": U(111), "batch_id": U(98), "quantity_change": 1}]}
+        response = self.sync(92, "record_stock_movement", U(110), excess, 5, "2026-11-18T04:00:00Z")
+        self.assert_batch_overflow(response, before)
+
+    def stock_rows(self):
+        with closing(sqlite3.connect(self.path)) as conn:
+            return {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+                    for table in ("stock_batches", "stock_movements", "batch_allocations",
+                                  "processed_operations", "receipt_ledger_head")}
+
+    def assert_batch_overflow(self, response, before):
+        # A single nonnegative batch cannot exceed the safe item total on its
+        # own. The field-specific error independently proves the batch guard ran.
+        self.assertEqual(response.status_code, 422, response.get_json())
+        self.assertEqual(response.get_json()["error"]["code"], "VALIDATION_ERROR")
+        self.assertIn("resulting batch balance", response.get_json()["error"]["details"]["fields"])
+        self.assertEqual(self.stock_rows(), before)
+
 
     def test_report_aggregates_bounds(self):
-        """Report movement_summary must reject aggregates exceeding MAX_SAFE."""
-        self.seed_empty()
-        from app.core.algorithms import MAX_SAFE
-        # Use two movements that together exceed MAX_SAFE
-        half = MAX_SAFE // 2 + 1  # each half is slightly more than half
+        """Legal current stock can coexist with an unrepresentable historical sum."""
+        from app.core.quantities import MAX_SAFE
+
+        for operation, kind, entity, payload in (
+            (40, "create_category", CAT, self.CREATE_CAT),
+            (31, "create_item", ITEM, self.CREATE_ITEM),
+        ):
+            prepared = self.sync(operation, kind, entity, payload, operation,
+                                 "2026-11-18T01:00:00Z")
+            self.assertEqual(prepared.status_code, 200, prepared.get_json())
+            self.assertEqual(prepared.get_json()["data"]["outcome"], "accepted")
+
         first = {
             "movement_id": U(101), "item_id": ITEM, "movement_type": "stock_in",
-            "quantity_change": half, "reason": "Delivery 1",
-            "allocations": [{"allocation_id": U(102), "batch_id": U(103), "quantity_change": half}],
-            "new_batches": [{"batch_id": U(103), "received_quantity": half,
-                             "purchase_date": "2026-11-18"}]
+            "quantity_change": MAX_SAFE, "reason": "Delivery 1",
+            "allocations": [{"allocation_id": U(102), "batch_id": U(103), "quantity_change": MAX_SAFE}],
+            "new_batches": [{"batch_id": U(103), "received_quantity": MAX_SAFE}],
+        }
+        used = {
+            "movement_id": U(107), "item_id": ITEM, "movement_type": "stock_out",
+            "quantity_change": -MAX_SAFE, "reason": "Used all of delivery 1",
+            "allocations": [{"allocation_id": U(108), "batch_id": U(103), "quantity_change": -MAX_SAFE}],
         }
         second = {
             "movement_id": U(104), "item_id": ITEM, "movement_type": "stock_in",
-            "quantity_change": half, "reason": "Delivery 2",
-            "allocations": [{"allocation_id": U(105), "batch_id": U(106), "quantity_change": half}],
-            "new_batches": [{"batch_id": U(106), "received_quantity": half,
-                             "purchase_date": "2026-11-18"}]
+            "quantity_change": 2, "reason": "Delivery 2",
+            "allocations": [{"allocation_id": U(105), "batch_id": U(106), "quantity_change": 2}],
+            "new_batches": [{"batch_id": U(106), "received_quantity": 2}],
         }
-        self.sync(92, "record_stock_movement", U(101), first, 3, "2026-11-18T02:00:00Z")
-        self.sync(93, "record_stock_movement", U(104), second, 4, "2026-11-18T02:05:00Z")
-        # Report should reject aggregate (sum exceeds MAX_SAFE)
-        r = self.client.get(f"/api/v1/reports/stock-movements?item_id={ITEM}")
-        self.assertEqual(r.status_code, 422)
-        self.assertEqual(r.get_json()["error"]["code"], "VALIDATION_ERROR")
+        for operation, payload, event, balance in (
+            (92, first, "2026-11-18T02:00:00Z", MAX_SAFE),
+            (94, used, "2026-11-18T02:02:00Z", 0),
+            (93, second, "2026-11-18T02:05:00Z", 2),
+        ):
+            accepted = self.sync(operation, "record_stock_movement", payload["movement_id"],
+                                 payload, operation, event)
+            self.assertEqual(accepted.status_code, 200, accepted.get_json())
+            self.assertEqual(accepted.get_json()["data"]["outcome"], "accepted")
+            inventory = self.client.get(f"/api/v1/inventory/{ITEM}")
+            self.assertEqual(inventory.status_code, 200, inventory.get_json())
+            self.assertEqual(inventory.get_json()["data"]["available_quantity"], balance)
+
+        url = f"/api/v1/reports/stock-movements?item_id={ITEM}&movement_type=stock_in"
+        report = self.client.get(url)
+        self.assertEqual(report.status_code, 422, report.get_json())
+        self.assertEqual(report.get_json()["error"]["code"], "VALIDATION_ERROR")
+        filtered = self.client.get(url + "&from=2026-11-18T02:05:00Z&page_size=1")
+        self.assertEqual(filtered.status_code, 200, filtered.get_json())
+        self.assertEqual(filtered.get_json()["meta"], {"page": 1, "page_size": 1, "total": 1})
+        self.assertEqual(filtered.get_json()["data"], [{
+            "item_id": ITEM, "unit_of_measurement": "kg", "movement_type": "stock_in",
+            "movement_count": 1, "total_quantity_change": 2,
+        }])
 
     # --- Issue 4: Old schema database migration ---
     def test_old_schema_reopens_without_error(self):
@@ -736,14 +820,14 @@ class RegressionTests(ContractCase):
         self.run_examples_a_to_d()
         # Create two movements with DIFFERENT operation IDs than movement IDs
         # and identical timestamps - order must be by commit_seq from ProcessedOperation.entity_id
-        self.sync(200, "record_stock_movement", U(201), {
+        first = self.sync(200, "record_stock_movement", U(201), {
             "movement_id": U(201), "item_id": ITEM, "movement_type": "stock_in",
             "quantity_change": 50, "reason": "Delivery A",
             "allocations": [{"allocation_id": U(202), "batch_id": U(203), "quantity_change": 50}],
             "new_batches": [{"batch_id": U(203), "received_quantity": 50,
                              "purchase_date": "2026-11-18"}]
         }, 3, "2026-11-18T02:00:00.000Z")
-        self.sync(204, "record_stock_movement", U(205), {
+        second = self.sync(204, "record_stock_movement", U(205), {
             "movement_id": U(205), "item_id": ITEM, "movement_type": "stock_in",
             "quantity_change": 30, "reason": "Delivery B",
             "allocations": [{"allocation_id": U(206), "batch_id": U(207), "quantity_change": 30}],
@@ -751,8 +835,10 @@ class RegressionTests(ContractCase):
                              "purchase_date": "2026-11-18"}]
         }, 4, "2026-11-18T02:00:00.000Z")  # same timestamp
 
-        # Verify snapshot has both movements with commit_seq and replay_status
-        s = self.client.get("/api/v1/snapshot").get_json()["data"]
+        self.assert_accepted(first)
+        self.assert_accepted(second)
+        # Verify snapshot has both movements with commit_seq and replay_status.
+        s = self.v2_snapshot()
         movements = s["stock_movements"]
         self.assertEqual(len(movements), 4)  # 2 from run_examples_a_to_d + 2 new
 
@@ -766,7 +852,7 @@ class RegressionTests(ContractCase):
             self.assertIsInstance(m["commit_seq"], int)
             self.assertGreater(m["commit_seq"], 0)
             self.assertIn("replay_status", m)
-            self.assertIn(m["replay_status"], ("verified", "provisional"))
+            self.assertEqual(m["replay_status"], "verified")
 
         # Order must follow commit_seq
         seqs = [m["commit_seq"] for m in new_movs]

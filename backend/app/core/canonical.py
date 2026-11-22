@@ -22,7 +22,7 @@ _UUID = re.compile(
 
 def norm_uuid(value, field):
     """Validate a UUID string and return its lowercase canonical form."""
-    if not isinstance(value, str) or not _UUID.match(value):
+    if not isinstance(value, str) or not _UUID.fullmatch(value):
         raise validation_error({field: "Must be a valid UUID."})
     return str(uuid.UUID(value))
 
@@ -38,9 +38,12 @@ def parse_json_strict(raw_bytes):
             seen[k] = v
         return seen
 
+    def reject_nonfinite(_token):
+        raise invalid_request("JSON numbers must be finite.")
+
     try:
-        return json.loads(raw_bytes, object_pairs_hook=no_dupes)
-    except ValueError:
+        return json.loads(raw_bytes, object_pairs_hook=no_dupes, parse_constant=reject_nonfinite)
+    except (ValueError, RecursionError):
         raise invalid_request("Malformed JSON.")
 
 
