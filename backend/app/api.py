@@ -1,14 +1,15 @@
-"""Flask routes under /api/v1 (BE-06). Thin: parse, call a service, wrap.
+"""Flask routes for the pinned v1 API and the opt-in v2 receipt/snapshot API.
 
 Every route returns the JSON envelope from API_CONTRACT section 3.
 """
 import json
+from contextlib import contextmanager
 
 from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from . import reports
+from . import replay, reports
 from .core import algorithms as alg
 from .core import commands as cmd
 from .core.canonical import norm_uuid, parse_json_strict
@@ -16,10 +17,11 @@ from .core.errors import ApiError, invalid_request, validation_error
 from .core.quantities import MAX_SAFE, is_json_integer
 from .core.timeutil import canonical_timestamp, parse_timestamp
 from .db import session_scope
-from .models import (Allocation, Batch, Category, Item, Movement, ProcessedOperation)
+from .models import Batch, Category, Movement
 from . import services as svc
 
 bp = Blueprint("api", __name__, url_prefix="/api/v1")
+bp_v2 = Blueprint("api_v2", __name__, url_prefix="/api/v2")
 
 
 # ------------------------------------------------------------------ helpers
@@ -33,6 +35,13 @@ def ok(data, status=200, meta=None):
 def scope(write=False):
     """Read-only by default. Mutation routes ask for write=True explicitly."""
     return session_scope(current_app.extensions["session_factory"], write=write)
+
+
+@contextmanager
+def stock_scope():
+    with scope() as session:
+        inventory, _ = replay.require_history(session)
+        yield session, inventory
 
 
 def now_fn():
@@ -66,16 +75,25 @@ def query_uuid(name):
         raise invalid_request(f"{name} must be a valid UUID.")
 
 
-def paginate(rows):
+def page_args():
     def pos_int(name, default, maximum=None):
         raw = request.args.get(name)
         if raw is None:
             return default
-        if not raw.isdigit() or int(raw) < 1 or (maximum and int(raw) > maximum):
+        limit = maximum or MAX_SAFE
+        digits = raw.lstrip("0")
+        if not digits.isascii() or not digits.isdecimal() or len(digits) > len(str(limit)):
             raise invalid_request(f"{name} must be a positive whole number.")
-        return int(raw)
+        value = int(digits)
+        if value > limit:
+            raise invalid_request(f"{name} must be a positive whole number.")
+        return value
 
-    page, size = pos_int("page", 1), pos_int("page_size", 25, 100)
+    return pos_int("page", 1), pos_int("page_size", 25, 100)
+
+
+def paginate(rows, paging):
+    page, size = paging
     start = (page - 1) * size
     return rows[start:start + size], {"page": page, "page_size": size, "total": len(rows)}
 
@@ -103,6 +121,8 @@ def ts_arg(name):
 
 def check_generation(session):
     """Mutations must carry the server generation id (API_CONTRACT section 2)."""
+    g.generation = current_generation(session)
+    g.settings_version = reports.get_settings(session)["settings_version"]
     if not current_app.config["REQUIRE_GENERATION"]:
         return
     sent = request.headers.get("X-Inventory-Generation")
@@ -110,7 +130,7 @@ def check_generation(session):
         sent = norm_uuid(sent, "X-Inventory-Generation")
     except ApiError:
         raise invalid_request("X-Inventory-Generation header is missing or malformed.")
-    if sent != current_generation(session):
+    if sent != g.generation:
         raise ApiError("RECOVERY_REQUIRED",
                        "The server generation changed. Keep local work and wait for review.", 409)
 
@@ -168,6 +188,7 @@ def handle_unexpected(e):
         "details": {}}}), 500
 
 
+@bp_v2.after_request
 @bp.after_request
 def add_headers(resp):
     resp.headers["Cache-Control"] = "no-store"
@@ -186,6 +207,7 @@ def add_headers(resp):
     return resp
 
 
+@bp_v2.before_request
 @bp.before_request
 def load_headers_info():
     with scope() as s:
@@ -256,6 +278,15 @@ SYNC_FIELDS = ("operation_id", "operation_type", "entity_id", "payload", "create
 
 @bp.post("/sync")
 def sync():
+    return _sync(1)
+
+
+@bp_v2.post("/sync")
+def sync_v2():
+    return _sync(2)
+
+
+def _sync(version):
     data = body_object()
     if set(data) != set(SYNC_FIELDS):
         raise invalid_request("The sync envelope needs exactly these fields.",
@@ -277,6 +308,8 @@ def sync():
             e.details.setdefault("operation_id", op_id)
             e.details.setdefault("outcome", "rejected")
         raise
+    if version == 1:
+        res = {key: res[key] for key in ("operation_id", "outcome", "processed_at", "result")}
     return ok(res)
 
 
@@ -291,8 +324,9 @@ def list_inventory():
     record = one_of("record_status", ("active", "archived", "all"), "active")
     sort = one_of("sort", ("name", "available_quantity"), "name")
     order = one_of("order", ("asc", "desc"), "asc")
-    with scope() as s:
-        rows = svc.all_item_views(s)
+    paging = page_args()
+    with stock_scope() as (_, inventory):
+        rows = svc.all_item_views(inventory)
     if record != "all":
         rows = [r for r in rows if r["is_active"] == (record == "active")]
     if category_id:
@@ -302,46 +336,49 @@ def list_inventory():
     if q:
         rows = alg.search_items(rows, q)
     rows = alg.sort_items(rows, sort, descending=(order == "desc"))
-    page, meta = paginate(rows)
+    page, meta = paginate(rows, paging)
     return ok(page, meta=meta)
 
 
 @bp.get("/inventory/<item_id>")
 def get_inventory_item(item_id):
     item_id = path_uuid(item_id, "item_id")
-    with scope() as s:
-        return ok(svc.item_view(s, svc.get_item(s, item_id)))
+    with stock_scope() as (s, inventory):
+        item = svc.get_item(s, item_id)
+        return ok(svc.item_view(item, inventory.item_totals[item_id]))
 
 
 @bp.get("/inventory/<item_id>/batches")
 def list_batches(item_id):
     item_id = path_uuid(item_id, "item_id")
     only_remaining = bool_arg("remaining_only", "false")
-    with scope() as s:
+    paging = page_args()
+    with stock_scope() as (s, inventory):
         svc.get_item(s, item_id)
         batches = s.scalars(select(Batch).where(Batch.item_id == item_id)
                             .order_by(Batch.created_at, Batch.batch_id)).all()
-        rows = [svc.batch_view(s, b) for b in batches]
+        rows = [svc.batch_view(b, inventory.batch_totals[b.batch_id]) for b in batches]
     if only_remaining:
         rows = [r for r in rows if r["remaining_quantity"] > 0]
-    page, meta = paginate(rows)
+    page, meta = paginate(rows, paging)
     return ok(page, meta=meta)
 
 
 @bp.get("/batches/<batch_id>")
 def get_batch(batch_id):
     batch_id = path_uuid(batch_id, "batch_id")
-    with scope() as s:
+    with stock_scope() as (s, inventory):
         b = s.get(Batch, batch_id)
         if b is None:
             raise ApiError("BATCH_NOT_FOUND", "The batch was not found.", 404)
-        return ok(svc.batch_view(s, b))
+        return ok(svc.batch_view(b, inventory.batch_totals[b.batch_id]))
 
 
 @bp.get("/categories")
 def list_categories():
     q = request.args.get("q")
     record = one_of("record_status", ("active", "archived", "all"), "active")
+    paging = page_args()
     with scope() as s:
         cats = s.scalars(select(Category).order_by(Category.normalized_name,
                                                    Category.category_id)).all()
@@ -352,7 +389,7 @@ def list_categories():
         from .core.normalize import normalize_name
         term = normalize_name(q)
         rows = [r for r in rows if term in r["normalized_name"]]
-    page, meta = paginate(rows)
+    page, meta = paginate(rows, paging)
     return ok(page, meta=meta)
 
 
@@ -374,7 +411,8 @@ def movement_filters():
 @bp.get("/stock-movements")
 def list_movements():
     item_id, mtype, start, end = movement_filters()
-    with scope() as s:
+    paging = page_args()
+    with stock_scope() as (s, inventory):
         if item_id:
             svc.get_item(s, item_id)
         q = select(Movement)
@@ -387,47 +425,52 @@ def list_movements():
         if end:
             q = q.where(Movement.created_at < end)
         q = q.order_by(Movement.created_at.desc(), Movement.movement_id.desc())
-        rows = [svc.movement_view(s, m) for m in s.scalars(q)]
-    page, meta = paginate(rows)
+        rows = [svc.movement_view(m, inventory.by_movement[m.movement_id]) for m in s.scalars(q)]
+    page, meta = paginate(rows, paging)
     return ok(page, meta=meta)
 
 
 @bp.get("/stock-movements/<movement_id>")
 def get_movement(movement_id):
     movement_id = path_uuid(movement_id, "movement_id")
-    with scope() as s:
+    with stock_scope() as (s, inventory):
         m = s.get(Movement, movement_id)
         if m is None:
             raise ApiError("MOVEMENT_NOT_FOUND", "The movement was not found.", 404)
-        return ok(svc.movement_view(s, m))
+        return ok(svc.movement_view(m, inventory.by_movement[m.movement_id]))
 
 
 # ------------------------------------------------------------------ reports
 @bp.get("/reports/dashboard")
 def report_dashboard():
     category_id = query_uuid("category_id")
-    raw = request.args.get("recent_limit", "5")
-    if not raw.isdigit() or not 1 <= int(raw) <= 25:
-        raise invalid_request("recent_limit must be between 1 and 25.")
-    with scope() as s:
+    limits = request.args.getlist("recent_limit")
+    raw = limits[0] if limits else "5"
+    if len(limits) > 1 or len(raw) > 2 or not raw.isascii() or not raw.isdecimal():
+        raise invalid_request("recent_limit must be a whole number between 1 and 25.")
+    recent_limit = int(raw)
+    if not 1 <= recent_limit <= 25:
+        raise invalid_request("recent_limit must be a whole number between 1 and 25.")
+    with stock_scope() as (s, inventory):
         if category_id:
             svc.get_category(s, category_id)
-        return ok(reports.dashboard(s, now_fn, category_id, int(raw)))
+        return ok(reports.dashboard(s, inventory, now_fn, category_id, recent_limit))
 
 
 @bp.get("/reports/low-stock")
 def report_low_stock():
     category_id = query_uuid("category_id")
     include_out = bool_arg("include_out_of_stock", "true")
-    with scope() as s:
+    paging = page_args()
+    with stock_scope() as (s, inventory):
         if category_id:
             svc.get_category(s, category_id)
-        items = [i for i in svc.all_item_views(s) if i["is_active"]
+        items = [i for i in svc.all_item_views(inventory) if i["is_active"]
                  and (category_id is None or i["category_id"] == category_id)]
     rows = alg.restocking_order(items)
     if not include_out:
         rows = [r for r in rows if r["stock_status"] != alg.OUT_OF_STOCK]
-    page, meta = paginate(rows)
+    page, meta = paginate(rows, paging)
     return ok(page, meta=meta)
 
 
@@ -436,19 +479,20 @@ def report_expiring():
     category_id = query_uuid("category_id")
     status = one_of("status", ("expired", "expiring_soon", "all"), "default")  \
         if "status" in request.args else None
-    with scope() as s:
+    paging = page_args()
+    with stock_scope() as (s, inventory):
         if category_id:
             svc.get_category(s, category_id)
         settings = reports.get_settings(s)
         from .core.timeutil import business_date
         today = business_date(now_fn(), settings["business_timezone"])
-        rows = reports.dated_batches(s, today, settings["expiration_warning_days"], category_id)
+        rows = reports.dated_batches(s, inventory, today, settings["expiration_warning_days"], category_id)
     exp_status = reports.expiration_status(settings, rows)
     if status is None:
         rows = [r for r in rows if r["expiration_status"] is not None]
     elif status != "all":
         rows = [r for r in rows if r["expiration_status"] == status]
-    page, meta = paginate(rows)
+    page, meta = paginate(rows, paging)
     meta["expiration_status"] = exp_status
     return ok(page, meta=meta)
 
@@ -456,58 +500,97 @@ def report_expiring():
 @bp.get("/reports/stock-movements")
 def report_movements():
     item_id, mtype, start, end = movement_filters()
-    with scope() as s:
+    paging = page_args()
+    with stock_scope() as (s, _):
         if item_id:
             svc.get_item(s, item_id)
         rows = reports.movement_summary(s, item_id, mtype, start, end)
-    page, meta = paginate(rows)
+    page, meta = paginate(rows, paging)
     return ok(page, meta=meta)
 
 
 # ----------------------------------------------------------------- snapshot
 @bp.get("/snapshot")
 def snapshot():
+    return _snapshot(1)
+
+
+@bp_v2.get("/snapshot")
+def snapshot_v2():
+    return _snapshot(2)
+
+
+def _snapshot(version):
     receipt_ids = request.args.getlist("receipt_id")
     if len(receipt_ids) > 100:
         raise invalid_request("At most 100 receipt_id values per request.")
-    ids = [path_uuid(r, "receipt_id") for r in receipt_ids]
+    ids = [path_uuid(value, "receipt_id") for value in receipt_ids]
     with scope() as s:
+        inventory, review = replay.require_history(s)
+        movements = inventory.movements
+        authoritative = review.state == "verified"
+        if version == 2:
+            if authoritative:
+                movements = sorted(movements, key=lambda row: review.movement_order(row)["commit_seq"])
+            else:
+                movements = sorted(movements, key=lambda row: row.movement_id)
+            last = (max(review.receipts.values(), key=lambda row: row.commit_seq, default=None)
+                    if authoritative else None)
+        else:
+            last = max(review.receipts.values(),
+                       key=lambda row: (row.processed_at, row.operation_id), default=None)
+
         checks = []
         for rid in ids:
-            r = s.get(ProcessedOperation, rid)
-            checks.append({"operation_id": rid,
-                           "status": "accepted" if r else "missing",
-                           "processed_at": svc.out_ts(r.processed_at) if r else None})
-        items = svc.all_item_views(s)
-        movements = s.scalars(select(Movement).order_by(Movement.created_at, Movement.movement_id)).all()
-        allocs = s.scalars(select(Allocation).order_by(Allocation.allocation_id)).all()
-        last = s.scalars(select(ProcessedOperation).order_by(
-            ProcessedOperation.commit_seq.desc())
-            .limit(1)).first()
+            receipt = review.receipts.get(rid)
+            check = {"operation_id": rid, "status": "accepted" if receipt else "missing",
+                     "processed_at": svc.out_ts(receipt.processed_at) if receipt else None}
+            if version == 2:
+                check.update(review.order(receipt) if receipt else {"commit_seq": None, "replay_status": None})
+            checks.append(check)
+
+        moves = []
+        for movement in movements:
+            view = svc.movement_view(movement, allocations=inventory.by_movement[movement.movement_id])
+            del view["allocations"]
+            if version == 2:
+                view.update(review.movement_order(movement))
+            moves.append(view)
+        g.generation = current_generation(s)
+        settings = reports.get_settings(s)
+        g.settings_version = settings["settings_version"]
         data = {
-            "schema_version": 1,
-            "server_generation_id": current_generation(s),
+            "schema_version": version,
+            "server_generation_id": g.generation,
             "receipt_checks": checks,
             "snapshot_at": canonical_timestamp(now_fn()).replace(".000Z", "Z"),
-            "categories": [svc.category_view(c) for c in s.scalars(
-                select(Category).order_by(Category.category_id))],
-            "inventory_items": sorted(items, key=lambda i: i["item_id"]),
-            "stock_batches": [svc.batch_view(s, b) for b in s.scalars(
-                select(Batch).order_by(Batch.batch_id))],
-            "stock_movements": [{k: v for k, v in svc.movement_view(s, m).items()
-                                 if k != "allocations"} for m in movements],
-            "batch_allocations": [{"allocation_id": a.allocation_id, "batch_id": a.batch_id,
-                                   "quantity_change": a.quantity_change,
-                                   "movement_id": a.movement_id} for a in allocs],
-            "settings": reports.get_settings(s),
+            "categories": [svc.category_view(category) for category in inventory.categories],
+            "inventory_items": [svc.item_view(item, inventory.item_totals[item.item_id])
+                                for item in inventory.items],
+            "stock_batches": [svc.batch_view(batch, inventory.batch_totals[batch.batch_id])
+                              for batch in inventory.batches],
+            "stock_movements": moves,
+            "batch_allocations": [{"allocation_id": allocation.allocation_id, "batch_id": allocation.batch_id,
+                                   "quantity_change": allocation.quantity_change,
+                                   "movement_id": allocation.movement_id} for allocation in inventory.allocations],
+            "settings": settings,
             "sync": {"last_committed_operation_id": last.operation_id if last else None,
-                     "last_committed_at": svc.out_ts(last.processed_at) if last else None,
-                     "last_commit_seq": last.commit_seq if last else 0},
+                     "last_committed_at": svc.out_ts(last.processed_at) if last else None},
             "backup": {"last_successful_backup_at": None},
         }
+        if version == 2:
+            data["sync"]["last_commit_seq"] = last.commit_seq if last else None
+            data["migration"] = review.migration(movements)
+            data["replay"] = {
+                "status": "authoritative" if authoritative else "provisional",
+                "order": "commit_seq" if authoritative else None,
+                "installation_blocked": not authoritative,
+            }
     return ok(data)
 
 
+
+@bp_v2.get("/health")
 @bp.get("/health")
 def health():
     return ok({"status": "ok"})

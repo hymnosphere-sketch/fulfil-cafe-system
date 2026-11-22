@@ -15,6 +15,8 @@ from sqlalchemy import (BigInteger, Boolean, Date, ForeignKey, Index, String, Te
                         UniqueConstraint, CheckConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from .core.quantities import MAX_SAFE
+
 
 class Base(DeclarativeBase):
     pass
@@ -106,16 +108,39 @@ class Allocation(Base):
     )
 
 
+VERIFIED_ORDER_STATES = ("verified", "verified_legacy")
+
+
 class ProcessedOperation(Base):
     """Server-side receipt. One row per accepted command (idempotency)."""
     __tablename__ = "processed_operations"
     operation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     operation_type: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[str | None] = mapped_column(String(36), index=True)
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     fingerprint_profile: Mapped[str] = mapped_column(String(32))
     processed_at: Mapped[str] = mapped_column(String(24))
     processing_result: Mapped[str] = mapped_column(Text)  # JSON text
-    commit_seq: Mapped[int] = mapped_column(BigInteger, index=True)  # authoritative commit order
+    commit_seq: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    migration_metadata: Mapped[str | None] = mapped_column(Text)
+    acceptance_command: Mapped[str | None] = mapped_column(Text)
+    acceptance_digest: Mapped[str | None] = mapped_column(String(64))
+
+
+class ReceiptLedgerHead(Base):
+    """The committed position survives independently of individual receipt rows."""
+
+    __tablename__ = "receipt_ledger_head"
+    singleton_id: Mapped[int] = mapped_column(primary_key=True)
+    committed_seq: Mapped[int] = mapped_column(BigInteger)
+    # NULL means a ledger created empty with full evidence from its first write.
+    legacy_through: Mapped[int | None] = mapped_column(BigInteger)
+    __table_args__ = (
+        CheckConstraint("singleton_id = 1", name="ck_receipt_ledger_singleton"),
+        CheckConstraint(f"committed_seq BETWEEN 0 AND {MAX_SAFE}", name="ck_receipt_ledger_head"),
+        CheckConstraint("legacy_through IS NULL OR legacy_through BETWEEN 0 AND committed_seq",
+                        name="ck_receipt_ledger_legacy"),
+    )
 
 
 class Setting(Base):
