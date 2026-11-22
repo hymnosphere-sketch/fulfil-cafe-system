@@ -80,11 +80,13 @@ function checkReceiptRows(receipts, expected, authoritative, sync) {
       fail('snapshot.receipt_checks.duplicate')
     }
     byId.set(key, row)
-    if (accepted && authoritative &&
-        sameWireUuid(row.operation_id, sync.last_committed_operation_id) &&
-        (row.commit_seq !== sync.last_commit_seq ||
-         !equalTime(row.processed_at, sync.last_committed_at))) {
-      fail('snapshot.receipt_checks.last_commit')
+    if (accepted && authoritative) {
+      const isHeadId = sameWireUuid(row.operation_id, sync.last_committed_operation_id)
+      const isHeadSequence = row.commit_seq === sync.last_commit_seq
+      if (isHeadId !== isHeadSequence ||
+          (isHeadId && !equalTime(row.processed_at, sync.last_committed_at))) {
+        fail('snapshot.receipt_checks.last_commit')
+      }
     }
   }
 }
@@ -121,12 +123,23 @@ function verifyStockChronology(data) {
   const introduced = new Set()
   const batchTotals = new Map()
   const itemTotals = new Map()
+  const movedItems = new Set()
   const safe = BigInt(Number.MAX_SAFE_INTEGER)
+  const minimumCommits = data.categories.length + data.inventory_items.length + data.stock_movements.length
+  if ((data.sync.last_commit_seq ?? 0) < minimumCommits) fail('snapshot.sync.last_commit_seq')
+  let movementCount = 0
   for (const movement of data.stock_movements) {
     const kind = movement.movement_type
     const positive = kind === 'stock_in' || kind === 'initial_stock' ||
       kind === 'positive_adjustment'
     const itemId = movement.item_id.toLowerCase()
+    // Each distinct item must have been created before its first movement. At least one
+    // category must precede those creates; the final item category may have changed.
+    movedItems.add(itemId)
+    movementCount += 1
+    if (movement.commit_seq < movementCount + movedItems.size + 1) {
+      fail('snapshot.stock_movements.commit_seq')
+    }
     for (const allocation of allocations.get(movement.movement_id.toLowerCase()) ?? []) {
       const bid = allocation.batch_id.toLowerCase()
       const batch = batches.get(bid)

@@ -21,7 +21,7 @@
 - V2 health: `GET /api/v2/health` returns the unchanged health envelope and generation/settings-version headers.
 - V2 snapshot: `GET /api/v2/snapshot` returns `schema_version: 2`, the original v1 collections plus `replay`, `migration`, `sync.last_commit_seq`, and per-movement `commit_seq` / `replay_status`. Receipt checks have both sequence and replay status.
 - The v2 parser requires exact known keys and validates generation UUIDs, timestamps, safe integer fields, signed movements, allocations, catalog and batch references, final derived balances, strict receipt checks and commit-order constraints. It reuses the existing, unchanged v1 inventory validator only after removing v2-only fields in a **temporary in-memory projection**.
-- **Authoritative:** `replay: { status: "authoritative", order: "commit_seq", installation_blocked: false }`, `migration.status: "verified"`. Movement sequences are positive safe integers, increasing, not necessarily consecutive (catalog commits occupy intervening positions). A fresh empty verified ledger has null last commit markers and is eligible for isolated installation.
+- **Authoritative:** `replay: { status: "authoritative", order: "commit_seq", installation_blocked: false }`, `migration.status: "verified"`. Movement sequences are positive safe integers, increasing, and leave room for prerequisite category and item creation. Catalog changes can occupy intervening positions. A fresh empty verified ledger has null last commit markers and is eligible for isolated installation.
 - **Provisional:** `replay: { status: "provisional", order: null, installation_blocked: true }`, `migration.status: "provisional"`. Movement and receipt positions, and the last-commit metadata, are null. The response can be inspected but **cannot be installed**. Never manufacture an ordering from event timestamps or UUIDs.
 - A `409 RECOVERY_REQUIRED`, malformed result, generation/settings mismatch, `400 INVALID_REQUEST`, or `503 SYNC_FAILED` cannot install data. The v2 client preserves safe, distinct error categories and Retry-After; it is read-only.
 - V1 sync responses and shared command fingerprinting are unchanged. The backend's proposed v2 sync acknowledgment remains a contract description for *future FE-09D*, not a live client method in FE-09C.
@@ -35,11 +35,11 @@
 - `readIsolatedV2({ indexedDB, databaseName })`.
 
 Steps:
-1. An explicitly invoked caller receives an authoritative verified snapshot via `createIsolatedV2Client` or a disposable injected test client. The install boundary validates again and verifies generation/settings headers.
-2. A **new unique slot** receives catalog, items, batches, movements, allocations, settings and metadata in one IndexedDB `readwrite` transaction. There is no active-pointer change during staging. A failed or interrupted transaction preserves previously active records.
-3. Close and reopen IndexedDB. Read the staged rows in saved original array order and revalidate the complete reconstructed v2 snapshot (including movement sequence and balance arithmetic).
-4. Atomically switch only the small `control.active` pointer after successful post-reopen verification. A concurrent initializer that changed the active pointer causes the operation to abort instead of silently overwriting a newer installation.
-5. Confirm the pointer update committed before reporting success. Subsequent explicit reads use only the active slot. Older slots remain inert for forensic comparison; automatic garbage collection/retention is deliberately not enabled in this limited test package.
+1. Capture the active slot and its validated snapshot before fetching. Validate the incoming authoritative snapshot and its generation and settings headers. Routine initialization rejects a different generation or an older commit position. The same commit is a no-op when its contents agree, allowing the response's `snapshot_at` to differ.
+2. A **new unique slot** receives catalog, items, batches, movements, allocations, settings and metadata in one IndexedDB `readwrite` transaction. Failed or interrupted staging aborts the transaction and preserves the active slot.
+3. Close and reopen IndexedDB. Compare the reconstructed staged snapshot with the complete validated input, including generation, settings and collection order.
+4. In that same transaction, check that the active pointer still matches the captured slot and switch it only if the verification succeeds and the operation has not been cancelled. Concurrent changes reject the install.
+5. Confirm transaction completion before reporting success. Subsequent reads use only the active slot. Older inactive slots are retained. Generation rotation and rollback require a separately approved supervised recovery workflow.
 
 **Manual test-only example** (execute in an isolated test harness; not in `src/main.js`):
 
@@ -76,7 +76,7 @@ For native IndexedDB, use a fresh Chrome profile and Vite on an isolated origin,
 node tests/fe09c-isolated.browser.mjs
 ```
 
-The browser script uses a fresh suffixed FE-09C database, checks durable install after reload, rejects coherent provisional history, verifies that forced IndexedDB staging rollback preserves the previous active slot, and tests an empty verified installation. It never transmits the fictional fixture to Flask.
+The browser script uses fresh suffixed databases and checks successful installation, reload, duplicate initialization, concurrent requests, rollback, staging and read errors, generation changes, and cancellation. To test a full restart, set `FE09C_RESTART_EVIDENCE` to a temporary file path before running the script, exit Chrome, and relaunch it with the same dedicated profile and Vite origin. Update `FE09C_CHROME_URL` and run `node tests/fe09c-isolated.browser.mjs --verify-restart`. The script uses fictional fixtures.
 
 **Evidence requirement:** Tests must actually run in an appropriate Node + isolated Chrome environment before this PR can be marked ready to merge. Source creation alone is not test execution.
 

@@ -7,7 +7,7 @@ import {
   FE09C_TEST_CONSENT, initializeIsolatedV2,
 } from '../src/db/v2-isolated-initialization.js'
 import {
-  checkedReceipt, fixtureId, lastOperationId,
+  checkedReceipt, extendedBalances, fixtureId, lastOperationId, makeExtendedVerifiedV2Snapshot,
   makeEmptyVerifiedV2Snapshot, makeProvisionalV2Snapshot,
   makeVerifiedV2Snapshot,
 } from './fixtures/api-v2-initialization.mjs'
@@ -57,6 +57,39 @@ test('authoritative receipt checks bind the last commit and original timestamp',
   assert.equal(validateV2Snapshot(value, [lastOperationId]).installable, true)
   value.receipt_checks[0].commit_seq = 3
   rejectProtocol(value, [lastOperationId])
+})
+
+test('a different receipt cannot claim the ledger head sequence', () => {
+  const other = fixtureId(42)
+  const value = checkedReceipt(makeVerifiedV2Snapshot(), other)
+  rejectProtocol(value, [other])
+  value.receipt_checks[0].commit_seq = 3
+  assert.equal(validateV2Snapshot(value, [other]).installable, true)
+})
+
+test('authoritative positions must allow the catalog and stock prerequisites', () => {
+  const value = makeVerifiedV2Snapshot()
+  value.stock_movements[0].commit_seq = 1
+  value.stock_movements[1].commit_seq = 2
+  value.sync.last_commit_seq = value.migration.verified_receipt_count = 2
+  rejectProtocol(value)
+  value.sync.last_commit_seq = value.migration.verified_receipt_count = 4
+  rejectProtocol(value)
+  value.stock_movements[0].commit_seq = 2
+  value.stock_movements[1].commit_seq = 3
+  rejectProtocol(value)
+})
+
+test('each stock prefix reconciles across an adjustment, a split withdrawal and a catalog gap', () => {
+  for (const { sequence, item, batches } of extendedBalances) {
+    const value = makeExtendedVerifiedV2Snapshot(sequence)
+    assert.equal(validateV2Snapshot(value).installable, true)
+    assert.equal(value.inventory_items[0].available_quantity, item)
+    assert.deepEqual(value.stock_batches.map(({ remaining_quantity }) => remaining_quantity), batches)
+  }
+  const value = makeExtendedVerifiedV2Snapshot()
+  assert.deepEqual(value.stock_movements.map(({ commit_seq }) => commit_seq), [3, 4, 6, 7])
+  assert.deepEqual(value.batch_allocations.slice(-2).map(({ quantity_change }) => quantity_change), [-6, -4])
 })
 
 test('missing receipt checks have null metadata', () => {
@@ -222,7 +255,7 @@ test('provisional snapshot is rejected before opening IndexedDB', async () => {
   let opened = false
   await assert.rejects(initializeIsolatedV2({
     consent: FE09C_TEST_CONSENT,
-    indexedDB: { open: () => { opened = true } },
+    indexedDB: { databases: async () => [], open: () => { opened = true } },
     client: { snapshot: async () => ({ data: value, installable: false, ...metadata(value) }) },
   }), (error) => error.code === 'SNAPSHOT_NOT_AUTHORITATIVE')
   assert.equal(opened, false)
@@ -233,7 +266,7 @@ test('incompatible response headers are refused before any persistent write', as
   let opened = false
   await assert.rejects(initializeIsolatedV2({
     consent: FE09C_TEST_CONSENT,
-    indexedDB: { open: () => { opened = true } },
+    indexedDB: { databases: async () => [], open: () => { opened = true } },
     client: { snapshot: async () => ({
       data: value, installable: true, ...metadata(value), generation: fixtureId(777),
     }) },

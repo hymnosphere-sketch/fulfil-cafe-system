@@ -1,17 +1,17 @@
-// FE-09C: explicitly invoked, disposable v2 snapshot initialization.
-// This module is not imported by app startup and never touches the v1 demo DB.
+import { isWireUuid, sameWireUuid } from '../api/commands.js'
 import { validateV2Snapshot } from '../api/v2-snapshot.js'
+import { requestResult, runTransaction } from './database.js'
 
 export const FE09C_TEST_DATABASE = 'fulfil-cafe-fe09c-v2-isolated'
 export const FE09C_TEST_CONSENT = 'ISOLATED_FE09C_TEST_ONLY'
 
-const COLLECTIONS = Object.freeze({
+const COLLECTIONS = {
   categories: 'category_id',
   inventory_items: 'item_id',
   stock_batches: 'batch_id',
   stock_movements: 'movement_id',
   batch_allocations: 'allocation_id',
-})
+}
 const DATA_STORES = [...Object.keys(COLLECTIONS), 'application_settings', 'manifests']
 const ALL_STORES = [...DATA_STORES, 'control']
 
@@ -23,129 +23,153 @@ export class IsolatedInitializationError extends Error {
   }
 }
 
-function requestResult(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed.'))
-  })
-}
-function completed(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve()
-    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted.'))
-    transaction.onerror = () => { /* onabort owns the final failure */ }
-  })
-}
-function openDatabase(factory, databaseName) {
+function openDatabase(factory, databaseName, { create = true } = {}) {
   return new Promise((resolve, reject) => {
     const req = factory.open(databaseName, 1)
+    let absent = false
+    let blocked = false
     req.onupgradeneeded = () => {
+      if (!create || blocked) {
+        absent = !create
+        req.transaction.abort()
+        return
+      }
       const db = req.result
       for (const [name, id] of Object.entries(COLLECTIONS)) {
-        const store = db.createObjectStore(name, { keyPath: ['slot', id] })
-        store.createIndex('by_slot', 'slot')
+        db.createObjectStore(name, { keyPath: ['slot', id] }).createIndex('by_slot', 'slot')
       }
-      const settings = db.createObjectStore('application_settings', { keyPath: ['slot', 'key'] })
-      settings.createIndex('by_slot', 'slot')
+      db.createObjectStore('application_settings', { keyPath: ['slot', 'key'] }).createIndex('by_slot', 'slot')
       db.createObjectStore('manifests', { keyPath: 'slot' })
       db.createObjectStore('control', { keyPath: 'key' })
     }
     req.onsuccess = () => {
       const db = req.result
       db.onversionchange = () => db.close()
-      if (ALL_STORES.some((name) => !db.objectStoreNames.contains(name))) {
+      if (blocked) db.close()
+      else if (ALL_STORES.some((name) => !db.objectStoreNames.contains(name))) {
         db.close()
         reject(new IsolatedInitializationError('SCHEMA_CONFLICT'))
       } else resolve(db)
     }
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed.'))
-    req.onblocked = () => reject(new IsolatedInitializationError('DATABASE_BLOCKED'))
-  })
-}
-async function activeSlot(db) {
-  const tx = db.transaction(['control'], 'readonly')
-  const done = completed(tx)
-  const current = await requestResult(tx.objectStore('control').get('active'))
-  await done
-  return current?.slot ?? null
-}
-async function stage(db, slot, snapshot) {
-  const tx = db.transaction(DATA_STORES, 'readwrite')
-  const done = completed(tx)
-  for (const [name, id] of Object.entries(COLLECTIONS)) {
-    const store = tx.objectStore(name)
-    snapshot[name].forEach((record, position) => {
-      store.add({ ...record, slot, position, [id]: record[id] })
-    })
-  }
-  const settings = tx.objectStore('application_settings')
-  settings.add({ slot, key: 'server_generation_id', value: snapshot.server_generation_id })
-  settings.add({ slot, key: 'settings', value: snapshot.settings })
-  const { categories, inventory_items, stock_batches, stock_movements,
-    batch_allocations, settings: _settings, server_generation_id: _generation,
-    ...metadata } = snapshot
-  tx.objectStore('manifests').add({ slot, metadata })
-  await done
-}
-async function readSlot(db, slot) {
-  const tx = db.transaction(DATA_STORES, 'readonly')
-  const done = completed(tx)
-  // Schedule every read before yielding, avoiding inactive IndexedDB transactions.
-  const result = Object.fromEntries(Object.keys(COLLECTIONS).map((name) =>
-    [name, requestResult(tx.objectStore(name).index('by_slot').getAll(slot))]))
-  const settingsRead = requestResult(tx.objectStore('application_settings').index('by_slot').getAll(slot))
-  const manifestRead = requestResult(tx.objectStore('manifests').get(slot))
-  const rows = Object.fromEntries(await Promise.all(Object.entries(result).map(async ([name, promise]) =>
-    [name, (await promise).sort((a, b) => a.position - b.position)
-      .map(({ slot: _slot, position: _position, ...record }) => record)])))
-  const settings = await settingsRead
-  const manifest = await manifestRead
-  await done
-  if (!manifest || settings.length !== 2) throw new IsolatedInitializationError('STAGING_INCOMPLETE')
-  const values = Object.fromEntries(settings.map(({ key, value }) => [key, value]))
-  if (!Object.hasOwn(values, 'settings') ||
-      !Object.hasOwn(values, 'server_generation_id')) {
-    throw new IsolatedInitializationError('STAGING_INCOMPLETE')
-  }
-  return { ...manifest.metadata, ...rows,
-    settings: values.settings, server_generation_id: values.server_generation_id }
-}
-function activate(db, previous, slot) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(['control'], 'readwrite')
-    const store = tx.objectStore('control')
-    let conflict = false
-    tx.oncomplete = () => resolve()
-    tx.onabort = () => reject(new IsolatedInitializationError(
-      conflict ? 'CONCURRENT_INITIALIZATION' : 'ACTIVATION_FAILED'))
-    tx.onerror = () => {}
-    const read = store.get('active')
-    read.onsuccess = () => {
-      if ((read.result?.slot ?? null) !== previous) {
-        conflict = true
-        tx.abort()
-      } else if (slot === null) store.delete('active')
-      else store.put({ key: 'active', slot })
+    req.onerror = () => {
+      if (absent) resolve(null)
+      else reject(req.error ?? new Error('IndexedDB open failed.'))
+    }
+    req.onblocked = () => {
+      blocked = true
+      reject(new IsolatedInitializationError('DATABASE_BLOCKED'))
     }
   })
 }
+
+async function activeSlot(tx) {
+  const current = await requestResult(tx.objectStore('control').get('active'))
+  return current?.slot ?? null
+}
+
+function stage(db, slot, snapshot) {
+  return runTransaction(db, DATA_STORES, 'readwrite', (tx) => {
+    for (const name of Object.keys(COLLECTIONS)) {
+      const store = tx.objectStore(name)
+      snapshot[name].forEach((record, position) => store.add({ ...record, slot, position }))
+    }
+    const settings = tx.objectStore('application_settings')
+    settings.add({ slot, key: 'server_generation_id', value: snapshot.server_generation_id })
+    settings.add({ slot, key: 'settings', value: snapshot.settings })
+    const { categories, inventory_items, stock_batches, stock_movements,
+      batch_allocations, settings: _settings, server_generation_id: _generation,
+      ...metadata } = snapshot
+    tx.objectStore('manifests').add({ slot, metadata })
+  })
+}
+
+async function readSlot(tx, slot) {
+  // Observe every request before yielding, including failures thrown during scheduling.
+  const readRows = async (name) => requestResult(tx.objectStore(name).index('by_slot').getAll(slot))
+  const readManifest = async () => requestResult(tx.objectStore('manifests').get(slot))
+  const collections = Object.keys(COLLECTIONS)
+  const [records, settings, manifest] = await Promise.all([
+    Promise.all(collections.map(readRows)), readRows('application_settings'), readManifest(),
+  ])
+  const values = Object.fromEntries(settings.map(({ key, value }) => [key, value]))
+  if (!manifest || settings.length !== 2 || !Object.hasOwn(values, 'settings') ||
+      !Object.hasOwn(values, 'server_generation_id')) {
+    throw new IsolatedInitializationError('STAGING_INCOMPLETE')
+  }
+  const rows = Object.fromEntries(collections.map((name, index) => [name, records[index]
+    .sort((a, b) => a.position - b.position)
+    .map(({ slot: _slot, position, ...record }, expectedPosition) => {
+      if (position !== expectedPosition) throw new IsolatedInitializationError('STAGING_INCOMPLETE')
+      return record
+    })]))
+  return { ...manifest.metadata, ...rows,
+    settings: values.settings, server_generation_id: values.server_generation_id }
+}
+
+function snapshotContents(snapshot) {
+  return JSON.stringify(snapshot, (_key, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]))
+  })
+}
+
+function checkCancelled(signal) {
+  if (signal?.aborted) throw new IsolatedInitializationError('CANCELLED')
+}
+
+function activate(db, previous, slot, expectedContents, signal) {
+  return runTransaction(db, ALL_STORES, 'readwrite', async (tx) => {
+    if ((await activeSlot(tx)) !== previous) {
+      throw new IsolatedInitializationError('CONCURRENT_INITIALIZATION')
+    }
+    const restored = await readSlot(tx, slot)
+    if (snapshotContents(restored) !== expectedContents) {
+      throw new IsolatedInitializationError('STAGING_MISMATCH')
+    }
+    checkCancelled(signal)
+    if (slot !== previous) await requestResult(tx.objectStore('control').put({ key: 'active', slot }))
+    return restored
+  })
+}
+
 function safeFactory(factory) {
   if (!factory || typeof factory.open !== 'function') {
     throw new IsolatedInitializationError('INDEXEDDB_UNAVAILABLE')
   }
   return factory
 }
+
 function validName(name) {
   return typeof name === 'string' &&
     /^fulfil-cafe-fe09c-v2-isolated(?:-[a-z0-9-]+)?$/.test(name)
 }
 
-/**
- * This is the only opt-in installation entry point. It can never write to the
- * application's existing 'fulfil-cafe-demo-inventory' database.
- * A unique staged slot is fully verified after reopening the DB, BEFORE
- * changing the active pointer. Aborted staging preserves the prior slot.
- */
+function readActive(db) {
+  return runTransaction(db, ALL_STORES, 'readonly', async (tx) => {
+    const slot = await activeSlot(tx)
+    if (!slot) return null
+    const snapshot = await readSlot(tx, slot)
+    if (!validateV2Snapshot(snapshot, []).installable) {
+      throw new IsolatedInitializationError('ACTIVE_SNAPSHOT_INVALID')
+    }
+    return { slot, snapshot }
+  })
+}
+
+async function readExisting(factory, databaseName) {
+  // Browsers with databases() can avoid even opening an absent namespace.
+  const databases = await factory.databases?.()
+  if (databases && !databases.some(({ name }) => name === databaseName)) return null
+  const db = await openDatabase(factory, databaseName, { create: false })
+  if (!db) return null
+  try {
+    return await readActive(db)
+  } finally {
+    db.close()
+  }
+}
+
+/** Install an authoritative snapshot only in an explicitly opted-in FE-09C test database. */
 export async function initializeIsolatedV2({
   client, consent, indexedDB: factory = globalThis.indexedDB,
   databaseName = FE09C_TEST_DATABASE,
@@ -159,46 +183,58 @@ export async function initializeIsolatedV2({
     throw new IsolatedInitializationError('INVALID_TEST_CONFIGURATION')
   }
   safeFactory(factory)
-  if (signal?.aborted) throw new IsolatedInitializationError('CANCELLED')
+  checkCancelled(signal)
+  const previous = await readExisting(factory, databaseName)
+  checkCancelled(signal)
   const response = await client.snapshot({ receiptIds: [], signal })
-  // Validate again at the storage boundary even when an injected client claims success.
   const checked = validateV2Snapshot(response.data, [])
   if (!checked.installable || response.installable !== true) {
     throw new IsolatedInitializationError('SNAPSHOT_NOT_AUTHORITATIVE')
   }
-  if (response.generation?.toLowerCase() !== response.data.server_generation_id.toLowerCase() ||
+  if (!isWireUuid(response.generation) || !sameWireUuid(response.generation, response.data.server_generation_id) ||
       response.settingsVersion !== response.data.settings.settings_version) {
     throw new IsolatedInitializationError('SNAPSHOT_HEADER_MISMATCH')
   }
-  if (signal?.aborted) throw new IsolatedInitializationError('CANCELLED')
-  const slot = createSlot()
-  if (typeof slot !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(slot)) {
-    throw new IsolatedInitializationError('INVALID_SLOT')
+  checkCancelled(signal)
+  const snapshot = structuredClone(checked.data)
+  const previousSlot = previous?.slot ?? null
+  let slot
+  let expectedContents = snapshotContents(snapshot)
+  if (previous) {
+    if (!sameWireUuid(previous.snapshot.server_generation_id, snapshot.server_generation_id)) {
+      throw new IsolatedInitializationError('GENERATION_MISMATCH')
+    }
+    const previousCommit = previous.snapshot.sync.last_commit_seq ?? 0
+    const incomingCommit = snapshot.sync.last_commit_seq ?? 0
+    if (incomingCommit < previousCommit) throw new IsolatedInitializationError('STALE_SNAPSHOT')
+    if (incomingCommit === previousCommit) {
+      const comparable = { ...snapshot, snapshot_at: previous.snapshot.snapshot_at }
+      expectedContents = snapshotContents(previous.snapshot)
+      if (snapshotContents(comparable) !== expectedContents) {
+        throw new IsolatedInitializationError('SNAPSHOT_CONFLICT')
+      }
+      slot = previousSlot
+    }
   }
 
-  let db = await openDatabase(factory, databaseName)
-  let previous
-  try {
-    previous = await activeSlot(db)
-    if (previous === slot) throw new IsolatedInitializationError('INVALID_SLOT')
-    await stage(db, slot, checked.data)
-  } finally {
-    db.close()
+  if (!slot) {
+    slot = createSlot()
+    if (typeof slot !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(slot) || previousSlot === slot) {
+      throw new IsolatedInitializationError('INVALID_SLOT')
+    }
+    const db = await openDatabase(factory, databaseName)
+    try {
+      await stage(db, slot, snapshot)
+    } finally {
+      db.close()
+    }
   }
 
-  // Reopen and independently recheck every persisted collection and metadata.
-  db = await openDatabase(factory, databaseName)
+  // Verify content and compare-and-swap the pointer in one transaction after reopening.
+  const db = await openDatabase(factory, databaseName, { create: false })
+  if (!db) throw new IsolatedInitializationError('STAGING_INCOMPLETE')
   try {
-    const restored = await readSlot(db, slot)
-    if (!validateV2Snapshot(restored, []).installable) {
-      throw new IsolatedInitializationError('STAGING_NOT_AUTHORITATIVE')
-    }
-    if (signal?.aborted) throw new IsolatedInitializationError('CANCELLED')
-    // Only the atomic pointer flip makes this version visible to readers.
-    await activate(db, previous, slot)
-    if (await activeSlot(db) !== slot) {
-      throw new IsolatedInitializationError('ACTIVATION_FAILED')
-    }
+    const restored = await activate(db, previousSlot, slot, expectedContents, signal)
     return Object.freeze({
       slot, databaseName, generation: restored.server_generation_id,
       settingsVersion: restored.settings.settings_version,
@@ -211,22 +247,11 @@ export async function initializeIsolatedV2({
   }
 }
 
-/** Read a previously installed isolated snapshot; never touch demo storage. */
+/** Read an active snapshot from the isolated test namespace. */
 export async function readIsolatedV2({
   indexedDB: factory = globalThis.indexedDB,
   databaseName = FE09C_TEST_DATABASE,
 } = {}) {
   if (!validName(databaseName)) throw new IsolatedInitializationError('INVALID_TEST_CONFIGURATION')
-  const db = await openDatabase(safeFactory(factory), databaseName)
-  try {
-    const slot = await activeSlot(db)
-    if (!slot) return null
-    const snapshot = await readSlot(db, slot)
-    if (!validateV2Snapshot(snapshot, []).installable) {
-      throw new IsolatedInitializationError('ACTIVE_SNAPSHOT_INVALID')
-    }
-    return { slot, snapshot }
-  } finally {
-    db.close()
-  }
+  return readExisting(safeFactory(factory), databaseName)
 }

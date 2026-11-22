@@ -77,6 +77,51 @@ export function makeEmptyVerifiedV2Snapshot() {
   snapshot.migration.verified_receipt_count = 0
   return snapshot
 }
+
+export const extendedBalances = [
+  { sequence: 3, item: 20, batches: [20] },
+  { sequence: 4, item: 15, batches: [15] },
+  { sequence: 5, item: 15, batches: [15] },
+  { sequence: 6, item: 23, batches: [15, 8] },
+  { sequence: 7, item: 13, batches: [9, 4] },
+]
+
+// Sequence 5 represents a catalog update. The adjustment introduces a second batch.
+export function makeExtendedVerifiedV2Snapshot(through = 7) {
+  const snapshot = makeVerifiedV2Snapshot()
+  const [item] = snapshot.inventory_items
+  const [batch] = snapshot.stock_batches
+  const newBatch = fixtureId(20)
+  const adjustment = fixtureId(21)
+  const withdrawal = fixtureId(22)
+  const created_at = '2026-11-18T03:10:00Z'
+  snapshot.stock_batches.push({ ...batch, batch_id: newBatch, received_quantity: 8, created_at })
+  snapshot.stock_movements.push(
+    { ...snapshot.stock_movements[0], movement_id: adjustment, created_at,
+      movement_type: 'positive_adjustment', reason: 'Recount', quantity_change: 8, commit_seq: 6 },
+    { ...snapshot.stock_movements[1], movement_id: withdrawal, quantity_change: -10, commit_seq: 7 },
+  )
+  snapshot.batch_allocations.push(
+    { allocation_id: fixtureId(23), movement_id: adjustment, batch_id: newBatch, quantity_change: 8 },
+    { allocation_id: fixtureId(24), movement_id: withdrawal, batch_id: batch.batch_id, quantity_change: -6 },
+    { allocation_id: fixtureId(25), movement_id: withdrawal, batch_id: newBatch, quantity_change: -4 },
+  )
+  const expected = extendedBalances.find(({ sequence }) => sequence === through)
+  if (!expected) throw new RangeError('Choose a stock commit in the extended fixture.')
+  snapshot.stock_movements = snapshot.stock_movements.filter(({ commit_seq }) => commit_seq <= through)
+  const movementIds = new Set(snapshot.stock_movements.map(({ movement_id }) => movement_id))
+  snapshot.batch_allocations = snapshot.batch_allocations.filter(({ movement_id }) => movementIds.has(movement_id))
+  snapshot.stock_batches = snapshot.stock_batches.slice(0, expected.batches.length)
+  snapshot.stock_batches.forEach((row, index) => { row.remaining_quantity = expected.batches[index] })
+  item.available_quantity = expected.item
+  if (through >= 5) {
+    snapshot.categories[0].name = 'Fictional ingredients'
+    snapshot.categories[0].normalized_name = 'fictional ingredients'
+  }
+  snapshot.sync.last_commit_seq = snapshot.migration.verified_receipt_count = through
+  if (through !== 4) snapshot.sync.last_committed_operation_id = fixtureId(100 + through)
+  return snapshot
+}
 export function makeProvisionalV2Snapshot() {
   const snapshot = makeVerifiedV2Snapshot()
   snapshot.replay = { status: 'provisional', order: null, installation_blocked: true }
