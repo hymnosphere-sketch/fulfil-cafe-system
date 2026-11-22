@@ -66,8 +66,13 @@ try {
       assert.equal(app, saved.app)
       assert.deepEqual(await run(({ active }) => active()), saved.active)
     })
+    await test('the previously active snapshot survives rejected staging and a full Chrome restart', async () => {
+      assert.ok(saved.rejected, 'Staged corruption regression must record restart evidence')
+      assert.deepEqual(await run(({ active }, name) => active(name), saved.rejected.name), saved.rejected.active)
+    })
   } else {
     let original
+    let rejected
     await test('authoritative empty and stocked snapshots install in separate disposable namespaces', async () => {
       const result = await run(async ({ fixtures, install, active, databaseName }) => {
         const emptyName = databaseName + '-empty'
@@ -181,6 +186,44 @@ try {
       assert.deepEqual(result, { generation: 'STAGING_MISMATCH', content: 'STAGING_MISMATCH', active: original })
     })
 
+    await test('staged data must preserve types, nested settings and complete collection records', async () => {
+      const result = await run(async ({ fixtures, install, active, failure, databaseName }) => {
+        const name = databaseName + '-staging-integrity'
+        await install(fixtures.makeVerifiedV2Snapshot(), { databaseName: name })
+        const before = await active(name)
+        const add = IDBObjectStore.prototype.add
+        const snapshot = fixtures.makeExtendedVerifiedV2Snapshot()
+        const inject = async (mutate) => {
+          IDBObjectStore.prototype.add = function (row, ...args) {
+            const changed = mutate(this.name, row)
+            if (changed) return add.call(this, changed, ...args)
+          }
+          try {
+            const code = await failure(() => install(snapshot, { databaseName: name }))
+            return { code, active: await active(name) }
+          } finally { IDBObjectStore.prototype.add = add }
+        }
+        const settings = (store, row) => store === 'application_settings' && row.key === 'settings'
+        const nan = await inject((store, row) => settings(store, row)
+          ? { ...row, value: { ...row.value, expiration_warning_days: NaN } } : row)
+        const infinity = await inject((store, row) => settings(store, row)
+          ? { ...row, value: { ...row.value, settings_version: Infinity } } : row)
+        const invalidSetting = await inject((store, row) => {
+          if (settings(store, row)) row.value.business_timezone = { invalid: true }
+          return row
+        })
+        const changedRecord = await inject((store, row) => store === 'stock_movements' && row.position === 0
+          ? { ...row, reason: 'Changed fictional reason' } : row)
+        const missingRecord = await inject((store, row) => store === 'inventory_items' ? null : row)
+        return { name, before, nan, infinity, invalidSetting, changedRecord, missingRecord }
+      })
+      assert.equal(result.before.balance, 15)
+      for (const key of ['nan', 'infinity', 'invalidSetting', 'changedRecord', 'missingRecord']) {
+        assert.deepEqual(result[key], { code: 'STAGING_MISMATCH', active: result.before }, key)
+      }
+      rejected = { name: result.name, active: result.before }
+    })
+
     await test('aborted active and staged reads each surface one failure and preserve active data', async () => {
       const result = await run(async ({ fixtures, install, active, failure }) => {
         const getAll = IDBIndex.prototype.getAll
@@ -222,6 +265,83 @@ try {
       assert.deepEqual(result, { code: 'CANCELLED', active: original })
     })
 
+    await test('pre-aborted initialization and cancellation while the snapshot is fetching preserve inventory', async () => {
+      const result = await run(async ({ fixtures, install, active, failure }) => {
+        const { createIsolatedV2Client } = await import('/src/api/v2-client.js')
+        const cancelled = new AbortController()
+        cancelled.abort()
+        let fetched = false
+        const before = await failure(() => install(() => { fetched = true }, { signal: cancelled.signal }))
+        const fetching = new AbortController()
+        const started = Promise.withResolvers()
+        const client = createIsolatedV2Client({
+          baseUrl: 'http://127.0.0.1:5000',
+          fetch: async (_url, { signal }) => {
+            started.resolve()
+            await new Promise((_resolve, reject) => {
+              signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+            })
+          },
+        })
+        const pending = install(fixtures.makeExtendedVerifiedV2Snapshot(), { client, signal: fetching.signal })
+          .then(() => null, (error) => error.kind)
+        await started.promise
+        fetching.abort()
+        return { before, fetched, during: await pending, active: await active() }
+      })
+      assert.deepEqual(result, { before: 'CANCELLED', fetched: false, during: 'cancelled', active: original })
+    })
+
+    await test('cancellation after the pointer write rolls back until commit, and preserves an already committed result', async () => {
+      const result = await run(async ({ fixtures, install, active, failure, databaseName }) => {
+        const name = databaseName + '-activation-cancel'
+        const first = await install(fixtures.makeVerifiedV2Snapshot(), { databaseName: name })
+        const put = IDBObjectStore.prototype.put
+        async function cancelAt(committed) {
+          const controller = new AbortController()
+          const { signal } = controller
+          let removed = 0
+          signal.removeEventListener = function (...args) {
+            if (args[0] === 'abort') removed++
+            return AbortSignal.prototype.removeEventListener.apply(this, args)
+          }
+          const events = []
+          IDBObjectStore.prototype.put = function (...args) {
+            const request = put.apply(this, args)
+            if (this.name === 'control') {
+              const tx = this.transaction
+              tx.addEventListener('abort', () => events.push('abort'), { once: true })
+              tx.addEventListener('complete', () => {
+                events.push('complete')
+                if (committed) controller.abort()
+              }, { once: true })
+              request.addEventListener('success', () => {
+                events.push('write')
+                if (!committed) controller.abort()
+              }, { once: true })
+            }
+            return request
+          }
+          let code
+          try {
+            code = await failure(() => install(fixtures.makeExtendedVerifiedV2Snapshot(), { databaseName: name, signal }))
+          } finally { IDBObjectStore.prototype.put = put }
+          return { code, events, removed, active: await active(name) }
+        }
+        return { original: first.slot, aborted: await cancelAt(false), committed: await cancelAt(true) }
+      })
+      assert.equal(result.aborted.code, 'CANCELLED')
+      assert.deepEqual(result.aborted.events, ['write', 'abort'])
+      assert.equal(result.aborted.active.slot, result.original)
+      assert.equal(result.aborted.active.balance, 15)
+      assert.equal(result.aborted.removed, 1)
+      assert.equal(result.committed.code, null)
+      assert.deepEqual(result.committed.events, ['write', 'complete'])
+      assert.notEqual(result.committed.active.slot, result.original)
+      assert.equal(result.committed.active.balance, 13)
+      assert.equal(result.committed.removed, 1)
+    })
+
     await test('overlapping requests and a later stale retry cannot roll back stock', async () => {
       const result = await run(async ({ fixtures, install, active, failure, response }) => {
         const older = fixtures.makeExtendedVerifiedV2Snapshot(6)
@@ -243,7 +363,7 @@ try {
       assert.deepEqual(result.active.sequences, [3, 4, 6, 7])
       await page.reload()
       assert.deepEqual(await run(({ active }) => active()), result.active)
-      if (evidence) await writeFile(evidence, JSON.stringify({ app, databaseName, active: result.active }))
+      if (evidence) await writeFile(evidence, JSON.stringify({ app, databaseName, active: result.active, rejected }))
     })
   }
   assert.deepEqual(page.exceptions, [])

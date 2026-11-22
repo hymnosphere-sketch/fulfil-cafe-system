@@ -125,8 +125,16 @@ function verifyStockChronology(data) {
   const itemTotals = new Map()
   const movedItems = new Set()
   const safe = BigInt(Number.MAX_SAFE_INTEGER)
-  const minimumCommits = data.categories.length + data.inventory_items.length + data.stock_movements.length
-  if ((data.sync.last_commit_seq ?? 0) < minimumCommits) fail('snapshot.sync.last_commit_seq')
+  // A verified ledger starts empty, retains its catalog, and creates every row active.
+  // Each retained inactive row therefore needs a separate archive commit.
+  const archivedCategories = data.categories.filter((row) => !row.is_active).length
+  const archivedItems = data.inventory_items.filter((row) => !row.is_active).length
+  const minimumCommits = data.categories.length + data.inventory_items.length +
+    data.stock_movements.length + archivedCategories + archivedItems
+  const last = data.sync.last_commit_seq
+  if ((last !== null && data.categories.length === 0) || (last ?? 0) < minimumCommits) {
+    fail('snapshot.sync.last_commit_seq')
+  }
   let movementCount = 0
   for (const movement of data.stock_movements) {
     const kind = movement.movement_type

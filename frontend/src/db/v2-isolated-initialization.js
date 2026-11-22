@@ -106,30 +106,56 @@ async function readSlot(tx, slot) {
     settings: values.settings, server_generation_id: values.server_generation_id }
 }
 
-function snapshotContents(snapshot) {
-  return JSON.stringify(snapshot, (_key, value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]))
-  })
+// Snapshots contain wire objects and arrays. Compare their values without JSON coercion.
+function sameSnapshotContents(left, right) {
+  if (Object.is(left, right)) return true
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false
+  const prototype = Object.getPrototypeOf(left)
+  if (prototype !== Object.getPrototypeOf(right)) return false
+  if (prototype === Array.prototype) {
+    if (left.length !== right.length) return false
+  } else if (prototype !== Object.prototype) return false
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length &&
+    keys.every((key) => Object.hasOwn(right, key) && sameSnapshotContents(left[key], right[key]))
 }
 
 function checkCancelled(signal) {
   if (signal?.aborted) throw new IsolatedInitializationError('CANCELLED')
 }
 
-function activate(db, previous, slot, expectedContents, signal) {
-  return runTransaction(db, ALL_STORES, 'readwrite', async (tx) => {
-    if ((await activeSlot(tx)) !== previous) {
-      throw new IsolatedInitializationError('CONCURRENT_INITIALIZATION')
-    }
-    const restored = await readSlot(tx, slot)
-    if (snapshotContents(restored) !== expectedContents) {
-      throw new IsolatedInitializationError('STAGING_MISMATCH')
-    }
-    checkCancelled(signal)
-    if (slot !== previous) await requestResult(tx.objectStore('control').put({ key: 'active', slot }))
-    return restored
-  })
+async function activate(db, previous, slot, expectedSnapshot, signal) {
+  let abortOnCancel
+  let cancelled = false
+  try {
+    return await runTransaction(db, ALL_STORES, 'readwrite', async (tx) => {
+      checkCancelled(signal)
+      abortOnCancel = () => {
+        try {
+          tx.abort()
+          cancelled = true
+        } catch {
+          // A transaction that has already finished determines the outcome.
+        }
+      }
+      signal?.addEventListener('abort', abortOnCancel, { once: true })
+      if ((await activeSlot(tx)) !== previous) {
+        throw new IsolatedInitializationError('CONCURRENT_INITIALIZATION')
+      }
+      const restored = await readSlot(tx, slot)
+      if (!sameSnapshotContents(restored, expectedSnapshot) || !validateV2Snapshot(restored, []).installable) {
+        throw new IsolatedInitializationError('STAGING_MISMATCH')
+      }
+      checkCancelled(signal)
+      if (slot !== previous) await requestResult(tx.objectStore('control').put({ key: 'active', slot }))
+      return restored
+    })
+  } catch (error) {
+    if (cancelled) throw new IsolatedInitializationError('CANCELLED')
+    throw error
+  } finally {
+    if (abortOnCancel) signal?.removeEventListener('abort', abortOnCancel)
+  }
 }
 
 function safeFactory(factory) {
@@ -187,6 +213,7 @@ export async function initializeIsolatedV2({
   const previous = await readExisting(factory, databaseName)
   checkCancelled(signal)
   const response = await client.snapshot({ receiptIds: [], signal })
+  checkCancelled(signal)
   const checked = validateV2Snapshot(response.data, [])
   if (!checked.installable || response.installable !== true) {
     throw new IsolatedInitializationError('SNAPSHOT_NOT_AUTHORITATIVE')
@@ -195,11 +222,10 @@ export async function initializeIsolatedV2({
       response.settingsVersion !== response.data.settings.settings_version) {
     throw new IsolatedInitializationError('SNAPSHOT_HEADER_MISMATCH')
   }
-  checkCancelled(signal)
   const snapshot = structuredClone(checked.data)
   const previousSlot = previous?.slot ?? null
   let slot
-  let expectedContents = snapshotContents(snapshot)
+  let expectedSnapshot = snapshot
   if (previous) {
     if (!sameWireUuid(previous.snapshot.server_generation_id, snapshot.server_generation_id)) {
       throw new IsolatedInitializationError('GENERATION_MISMATCH')
@@ -209,8 +235,8 @@ export async function initializeIsolatedV2({
     if (incomingCommit < previousCommit) throw new IsolatedInitializationError('STALE_SNAPSHOT')
     if (incomingCommit === previousCommit) {
       const comparable = { ...snapshot, snapshot_at: previous.snapshot.snapshot_at }
-      expectedContents = snapshotContents(previous.snapshot)
-      if (snapshotContents(comparable) !== expectedContents) {
+      expectedSnapshot = previous.snapshot
+      if (!sameSnapshotContents(comparable, expectedSnapshot)) {
         throw new IsolatedInitializationError('SNAPSHOT_CONFLICT')
       }
       slot = previousSlot
@@ -224,7 +250,7 @@ export async function initializeIsolatedV2({
     }
     const db = await openDatabase(factory, databaseName)
     try {
-      await stage(db, slot, snapshot)
+      await stage(db, slot, structuredClone(snapshot))
     } finally {
       db.close()
     }
@@ -234,7 +260,7 @@ export async function initializeIsolatedV2({
   const db = await openDatabase(factory, databaseName, { create: false })
   if (!db) throw new IsolatedInitializationError('STAGING_INCOMPLETE')
   try {
-    const restored = await activate(db, previousSlot, slot, expectedContents, signal)
+    const restored = await activate(db, previousSlot, slot, expectedSnapshot, signal)
     return Object.freeze({
       slot, databaseName, generation: restored.server_generation_id,
       settingsVersion: restored.settings.settings_version,

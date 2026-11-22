@@ -41,6 +41,28 @@ test('an empty but authoritative ledger is installable for isolated test initial
   assert.equal(validateV2Snapshot(makeEmptyVerifiedV2Snapshot()).installable, true)
 })
 
+test('an authoritative catalog accounts for creation and separate archive commits', () => {
+  const value = makeEmptyVerifiedV2Snapshot()
+  value.sync = { last_commit_seq: 1, last_committed_operation_id: lastOperationId,
+    last_committed_at: value.snapshot_at }
+  value.migration.verified_receipt_count = 1
+  rejectProtocol(value)
+
+  value.categories = makeVerifiedV2Snapshot().categories
+  assert.equal(validateV2Snapshot(value).installable, true)
+  value.categories[0].is_active = false
+  rejectProtocol(value)
+  value.sync.last_commit_seq = value.migration.verified_receipt_count = 2
+  assert.equal(validateV2Snapshot(value).installable, true)
+
+  const [item] = makeVerifiedV2Snapshot().inventory_items
+  value.inventory_items = [{ ...item, is_active: false, available_quantity: 0, stock_status: 'out_of_stock' }]
+  value.sync.last_commit_seq = value.migration.verified_receipt_count = 3
+  rejectProtocol(value)
+  value.sync.last_commit_seq = value.migration.verified_receipt_count = 4
+  assert.equal(validateV2Snapshot(value).installable, true)
+})
+
 test('coherent provisional history is readable but cannot be installed', () => {
   const result = validateV2Snapshot(makeProvisionalV2Snapshot())
   assert.equal(result.installable, false)
