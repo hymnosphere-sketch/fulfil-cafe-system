@@ -20,6 +20,8 @@ import {
   CalendarClock,
   ChartColumn,
   CircleAlert,
+  CircleCheck,
+  Clock,
   Coffee,
   History,
   Info,
@@ -55,7 +57,7 @@ function renderIcons(root) {
   createIcons({
     root,
     icons: {
-      ArrowLeft, ArrowLeftRight, CalendarClock, ChartColumn, CircleAlert, Coffee, History, Info,
+      ArrowLeft, ArrowLeftRight, CalendarClock, ChartColumn, CircleAlert, CircleCheck, Clock, Coffee, History, Info,
       LayoutDashboard, Menu, Package, PackageMinus, PackagePlus, PanelLeft, RefreshCw,
       Settings, Tags, TriangleAlert, Wifi, X,
     },
