@@ -9,9 +9,9 @@ function recovery(code) {
   return new ApiClientError('recovery_required', { code, outcome: 'paused', retry: 'pause' })
 }
 
-function validateDeliveryOrder(operations) {
+function validateDeliveryOrder(operations, initialCommit = 0) {
   let next = 0
-  let lastCommit = 0
+  let lastCommit = initialCommit
   for (const entry of operations) {
     if (entry.status === 'synchronized' && entry.resolution_status === 'none') {
       const receipt = entry.acknowledgment
@@ -30,8 +30,8 @@ function validateDeliveryOrder(operations) {
 }
 
 async function drainQueue(queue, { client, reader, signal, now, progress }, finish) {
-  const { generation, settingsVersion, operations } = await queue.read()
-  const { next, lastCommit } = validateDeliveryOrder(operations)
+  const { generation, settingsVersion, operations, initialCommit } = await queue.read()
+  const { next, lastCommit } = validateDeliveryOrder(operations, initialCommit)
   let commit = lastCommit
   let verified = false
 
@@ -56,6 +56,9 @@ async function drainQueue(queue, { client, reader, signal, now, progress }, fini
         if (!sameWireUuid(current.generation, generation)) throw recovery('GENERATION_MISMATCH')
         if (current.settingsVersion !== settingsVersion) throw recovery('SETTINGS_VERSION_MISMATCH')
         if (!current.installable) throw recovery('PROVISIONAL_HISTORY')
+        if (initialCommit !== undefined && (current.data.sync.last_commit_seq ?? 0) < lastCommit) {
+          throw recovery('STALE_SERVER_HISTORY')
+        }
         verified = true
       }
       if (signal?.aborted) return finish('cancelled', { operationId })
@@ -96,6 +99,14 @@ export async function drainIsolatedV2Queue({
   consent, databaseName, indexedDB, baseUrl, fetch, timeoutMs, now = Date.now, signal,
 } = {}) {
   if (consent !== FE09D_TEST_CONSENT) throw new TypeError('FE-09D requires isolated test consent.')
+  return drainOrderedV2Queue({
+    baseUrl, fetch, timeoutMs, now, signal,
+    withQueue: (work) => withIsolatedV2Queue({ consent, databaseName, indexedDB }, work),
+  })
+}
+
+// Storage supplies the committed rows and saves delivery evidence in its own transaction.
+export async function drainOrderedV2Queue({ withQueue, baseUrl, fetch, timeoutMs, now = Date.now, signal }) {
   const progress = { synchronized: 0 }
   const finish = (status, details) => ({ status, ...progress, ...details })
   if (signal?.aborted) return finish('cancelled')
@@ -109,7 +120,7 @@ export async function drainIsolatedV2Queue({
       if (!lock) return finish('busy')
       if (signal?.aborted) return finish('cancelled')
       try {
-        return await withIsolatedV2Queue({ consent, databaseName, indexedDB }, (queue) =>
+        return await withQueue((queue) =>
           drainQueue(queue, { client, reader, signal, now, progress }, finish))
       } catch (error) {
         return finish('storage_failure', { code: error.code ?? null })

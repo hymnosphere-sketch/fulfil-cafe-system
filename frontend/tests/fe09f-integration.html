@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fulfil Cafe | Isolated integration</title>
+</head>
+<body>
+  <div id="integration-app">
+    <main class="container cafe-theme py-4" aria-labelledby="fixture-title" hidden>
+      <p class="preview-label d-inline-block">Integration Test · Fictional Data</p>
+      <h1 id="fixture-title">Isolated inventory integration</h1>
+      <form class="d-grid gap-3" data-integration-initialize inert>
+        <div>
+          <label class="form-label" for="fixture-port">Disposable Flask port</label>
+          <input class="form-control" type="text" id="fixture-port" name="port" inputmode="numeric"
+            pattern="[1-9][0-9]{0,4}" maxlength="5" required aria-describedby="fixture-port-help">
+          <p class="cafe-muted mt-2 mb-0" id="fixture-port-help">Use the port printed by the local FE-09F fixture launcher.</p>
+        </div>
+        <div><button class="btn btn-primary" type="submit">Initialize fictional inventory</button></div>
+      </form>
+      <p class="mt-3 mb-0" data-integration-message role="status"></p>
+    </main>
+  </div>
+  <script type="module" src="./fe09f-integration.mjs"></script>
+</body>
+</html>

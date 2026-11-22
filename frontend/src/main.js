@@ -42,6 +42,7 @@ import {
 
 import { initializeSidebar } from './components/sidebar.js'
 import { renderStorageState } from './components/local-storage-status.js'
+import { renderSyncBadge, renderSyncPanel, renderSyncSummary } from './components/sync-status.js'
 import { initializeConnectivity, updateStorageStatus } from './components/topbar.js'
 import { renderAppLayout } from './layouts/app-layout.js'
 import { loadDashboard, renderDashboard } from './pages/dashboard.js'
@@ -52,6 +53,7 @@ import { createStockWorkspace } from './pages/stock-workspace.js'
 import { createTransactionHistory } from './pages/transaction-history.js'
 import { routeHref, routes, startRouter } from './router.js'
 import { createLocalInventorySession } from './services/local-inventory-session.js'
+import { deriveSyncStatus } from './services/sync-status.js'
 
 function renderIcons(root) {
   createIcons({
@@ -64,8 +66,8 @@ function renderIcons(root) {
   })
 }
 
-function mountApplication(app, { demoRepository, scenario } = {}) {
-  app.innerHTML = renderAppLayout(routes)
+export function mountApplication(app, { demoRepository, scenario, integration } = {}) {
+  app.innerHTML = renderAppLayout(routes, { integration })
 
   const shell = app.querySelector('.app-shell')
   const main = shell.querySelector('main')
@@ -76,13 +78,17 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
     window.scrollTo(0, 0)
   })
 
-  const storageMode = demoRepository ? 'isolated' : 'persistent'
+  const storageMode = integration ? 'integration' : demoRepository ? 'isolated' : 'persistent'
   let storageStatus = { state: demoRepository ? 'isolated' : 'opening' }
   let activeRoute
   let changeChannel
+  let syncActive = false
+  let syncResult
+  let retryDisplay
   const session = demoRepository ? null : createLocalInventorySession({
     onUpdate: showStorageStatus,
-    onCommit() { changeChannel?.postMessage('inventory-committed') },
+    createRepository: integration?.createRepository,
+    onCommit: notifyInventoryCommitted,
   })
   const repository = demoRepository ?? session.repository
   const workspaceOptions = { repository, renderIcons, storageMode }
@@ -90,6 +96,60 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
   const stockWorkspace = createStockWorkspace(workspaceOptions)
   const transactionHistory = createTransactionHistory(workspaceOptions)
   const reportsWorkspace = createReportsWorkspace(workspaceOptions)
+
+  function notifyInventoryCommitted() {
+    changeChannel?.postMessage('inventory-committed')
+  }
+
+  function renderSyncStatus() {
+    if (!integration) return
+    const queue = storageStatus.queue
+    const hasPending = queue?.operations.some(({ status }) => status === 'pending')
+    const model = deriveSyncStatus({
+      configured: true, queue, loading: storageStatus.state === 'opening',
+      unavailable: storageStatus.state === 'error', active: syncActive, result: hasPending ? syncResult : undefined,
+    })
+    const sections = [
+      [topbar.querySelector('[data-app-sync-badge]'), renderSyncBadge],
+      [main.querySelector('[data-app-sync-panel]'), renderSyncPanel],
+      [main.querySelector('[data-app-sync-summary]'), renderSyncSummary],
+    ]
+    for (const [section, render] of sections) {
+      if (section) {
+        section.innerHTML = render(model)
+        renderIcons(section)
+      }
+    }
+    const announcement = shell.querySelector('[data-app-sync-announcement]')
+    if (announcement.textContent !== model.label) announcement.textContent = model.label
+    const button = main.querySelector('[data-integration-sync]')
+    if (button) {
+      button.disabled = syncActive || !model.counts?.pending ||
+        ['retry_delayed', 'needs_review', 'recovery_required'].includes(model.state)
+    }
+    clearTimeout(retryDisplay)
+    if (model.state === 'retry_delayed') {
+      // Refresh the label and the button only. Delivery still needs a manual action.
+      retryDisplay = setTimeout(renderSyncStatus, Math.min(60_000, Math.max(1, model.retryAt - Date.now())))
+    }
+  }
+
+  async function synchronize(button) {
+    if (!integration || syncActive || button.disabled) return
+    syncActive = true
+    syncResult = undefined
+    renderSyncStatus()
+    try {
+      syncResult = await integration.synchronize(session.withDeliveryQueue)
+      notifyInventoryCommitted()
+    } catch {
+      syncResult = { status: 'storage_failure' }
+    } finally {
+      await session.refresh()
+      syncActive = false
+      renderSyncStatus()
+    }
+  }
 
   function refreshDashboard() {
     const dashboard = main.querySelector('.inventory-dashboard')
@@ -115,7 +175,7 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
     const [path, query] = window.location.hash.split('?', 2)
     const parameters = path === routeHref(route.id) ? new URLSearchParams(query) : originalParameters
     if (route.id === 'settings') {
-      main.innerHTML = renderSettings(storageStatus)
+      main.innerHTML = renderSettings(storageStatus, { integration })
       renderIcons(main)
     } else if (storageStatus.state !== 'ready' && storageStatus.state !== 'isolated') {
       main.innerHTML = renderStorageState(route.title, storageStatus)
@@ -129,10 +189,11 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
     } else if (route.id === 'reports') {
       reportsWorkspace.mount(main, parameters)
     } else {
-      main.innerHTML = renderDashboard()
+      main.innerHTML = renderDashboard({ integration })
       renderIcons(main)
       refreshDashboard()
     }
+    renderSyncStatus()
   }
 
   function showStorageStatus(status, refreshView) {
@@ -144,7 +205,10 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
       const focusedInView = main.contains(document.activeElement)
       renderActiveView()
       if (focusedInView) main.querySelector('#page-title')?.focus({ preventScroll: true })
-    } else if (refreshView) refreshActiveView()
+    } else {
+      renderSyncStatus()
+      if (refreshView) refreshActiveView()
+    }
   }
 
   shell.querySelector('.app-skip-link').addEventListener('click', (event) => {
@@ -152,7 +216,9 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
     main.focus()
   })
   main.addEventListener('click', (event) => {
-    if (event.target.closest('[data-storage-retry]')) void session?.initialize({ reopen: true })
+    const sync = event.target.closest('[data-integration-sync]')
+    if (sync) void synchronize(sync)
+    else if (event.target.closest('[data-storage-retry]')) void session?.initialize({ reopen: true })
     else if (event.target.closest('[data-storage-reload]')) window.location.reload()
   })
 
@@ -170,7 +236,7 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
 
   if (session) {
     try {
-      changeChannel = new BroadcastChannel('fulfil-cafe-demo-inventory')
+      changeChannel = new BroadcastChannel(integration?.databaseName ?? 'fulfil-cafe-demo-inventory')
       changeChannel.addEventListener('message', (event) => {
         if (event.data === 'inventory-committed') void session.refresh(true)
       })
@@ -191,12 +257,14 @@ function mountApplication(app, { demoRepository, scenario } = {}) {
 
 const app = document.querySelector('#app')
 const developmentScenario = import.meta.env.DEV ? new URLSearchParams(location.search).get('dashboard-state') : null
-if (import.meta.env.DEV && new URLSearchParams(location.search).has('showcase')) {
-  const { showDesignShowcase } = await import('./pages/showcase-preview.js')
-  showDesignShowcase(app)
-} else if (import.meta.env.DEV && ['empty', 'error', 'loading', 'unavailable'].includes(developmentScenario)) {
-  const { createDemoInventoryRepository } = await import('./data/demo-inventory-repository.js')
-  mountApplication(app, { demoRepository: createDemoInventoryRepository(), scenario: developmentScenario })
-} else {
-  mountApplication(app)
+if (app) {
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has('showcase')) {
+    const { showDesignShowcase } = await import('./pages/showcase-preview.js')
+    showDesignShowcase(app)
+  } else if (import.meta.env.DEV && ['empty', 'error', 'loading', 'unavailable'].includes(developmentScenario)) {
+    const { createDemoInventoryRepository } = await import('./data/demo-inventory-repository.js')
+    mountApplication(app, { demoRepository: createDemoInventoryRepository(), scenario: developmentScenario })
+  } else {
+    mountApplication(app)
+  }
 }

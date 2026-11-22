@@ -42,12 +42,13 @@ export const INVENTORY_STORES = {
   application_settings: { keyPath: 'setting_key', indexes: [] },
 }
 
-export function upgradeInventorySchema(database, oldVersion) {
+export function upgradeInventorySchema(database, oldVersion, { reserveArchivedCategoryNames = true } = {}) {
   if (oldVersion < 1) {
     for (const [storeName, { keyPath, indexes }] of Object.entries(INVENTORY_STORES)) {
       const store = database.createObjectStore(storeName, { keyPath })
       for (const [name, indexKeyPath, options] of indexes) {
-        store.createIndex(name, indexKeyPath, options)
+        store.createIndex(name, indexKeyPath,
+          storeName === 'categories' && !reserveArchivedCategoryNames ? undefined : options)
       }
     }
   }

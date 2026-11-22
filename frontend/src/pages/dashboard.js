@@ -168,8 +168,8 @@ export function renderDashboardResults(summary, {
   const hasHistory = summary.recentMovements.length > 0
   return `
     <p class="dashboard-context cafe-muted">
-      <span class="dashboard-data-label">Fictional demonstration data</span>
-      <span>Demo date <time datetime="${escapeText(businessDate)}">${escapeText(demoDate)}</time> · ${escapeText(businessTimezone)}</span>
+      <span class="dashboard-data-label">${storageMode === 'integration' ? 'Fictional integration data' : 'Fictional demonstration data'}</span>
+      <span>${storageMode === 'integration' ? 'Fixture date' : 'Demo date'} <time datetime="${escapeText(businessDate)}">${escapeText(demoDate)}</time> · ${escapeText(businessTimezone)}</span>
     </p>
     ${renderMetrics(summary, businessDate, warningDays)}
     ${summary.counts.totalActive === 0 ? renderMessage({
@@ -191,14 +191,14 @@ export function renderDashboardResults(summary, {
   `
 }
 
-export function renderDashboard() {
+export function renderDashboard({ integration } = {}) {
   return `
     <div class="inventory-dashboard">
       ${renderPageHeader({
         title: 'Dashboard',
         description: 'Review the demo inventory, stock requiring attention, and recent movements.',
       })}
-      ${renderSyncSummary()}
+      ${integration ? '<div data-app-sync-summary></div>' : renderSyncSummary()}
       <p class="visually-hidden" role="status" data-dashboard-announcement></p>
       <div class="dashboard-results" data-dashboard-results aria-busy="true">
         <div class="dashboard-state">
@@ -237,9 +237,10 @@ export async function loadDashboard(page, {
     const snapshot = await readSnapshot({ scenario })
     if (!isCurrent()) return
 
-    const summary = summarizeInventory(snapshot, demoBusinessDate)
+    const businessDate = snapshot.businessDate ?? demoBusinessDate
+    const summary = summarizeInventory(snapshot, businessDate)
     markup = renderDashboardResults(summary, {
-      businessDate: demoBusinessDate,
+      businessDate,
       businessTimezone: snapshot.settings?.business_timezone,
       warningDays: snapshot.settings?.expiration_warning_days,
       storageMode,

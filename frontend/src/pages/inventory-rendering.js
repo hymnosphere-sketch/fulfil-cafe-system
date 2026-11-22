@@ -61,11 +61,12 @@ export function renderInventoryQuantity(quantity, unit, signed = false) {
 }
 
 export function renderDemoContext(model, module, storageMode) {
-  const date = model ? ` Demo date ${renderDate(model.businessDate)} · ${escapeInventoryText(model.businessTimezone)}.` : ''
+  const integrated = storageMode === 'integration'
+  const date = model ? ` ${integrated ? 'Fixture date' : 'Demo date'} ${renderDate(model.businessDate)} · ${escapeInventoryText(model.businessTimezone)}.` : ''
   return renderMessage({
     tone: 'info',
     icon: 'info',
-    title: 'Fictional demonstration data',
+    title: integrated ? 'Fictional integration data' : 'Fictional demonstration data',
     message: demoStorageNotice(storageMode) + (module === 'inventory' ? date : ''),
   })
 }

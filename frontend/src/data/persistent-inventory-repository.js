@@ -39,21 +39,27 @@ function writeRecords(transaction, writes) {
     requestResult(transaction.objectStore(name)[method](record))))
 }
 
-async function initialize(database, readFixture) {
+const demoProfile = {
+  verifyMetadata,
+  buildQueueRecord: buildDemoQueueRecord,
+  prepareSeed: (snapshot) => ({ snapshot, metadata: { dataset: 'fictional', business_date: demoBusinessDate } }),
+}
+
+async function initialize(database, readFixture, profile) {
   const existing = await runTransaction(database, [SETTINGS], 'readonly',
     (transaction) => getSetting(transaction, METADATA_KEY))
   if (existing) {
-    verifyMetadata(existing)
+    profile.verifyMetadata(existing)
     return
   }
 
   // Fetch and validate the fixture before opening the write transaction.
-  const fixture = structuredClone(await readFixture())
-  summarizeInventory(fixture, demoBusinessDate)
+  const { snapshot: fixture, metadata } = profile.prepareSeed(structuredClone(await readFixture()))
+  summarizeInventory(fixture, metadata.business_date)
   await runTransaction(database, INITIALIZATION_STORES, 'readwrite', async (transaction) => {
     const initialized = await getSetting(transaction, METADATA_KEY)
     if (initialized) {
-      verifyMetadata(initialized)
+      profile.verifyMetadata(initialized)
       return
     }
     const counts = await Promise.all(INITIALIZATION_STORES.map((name) =>
@@ -67,24 +73,25 @@ async function initialize(database, readFixture) {
     await writeRecords(transaction, [
       ...writes,
       [SETTINGS, { setting_key: EXPIRATION_SETTINGS_KEY, value: fixture.settings }],
-      [SETTINGS, { setting_key: METADATA_KEY, dataset: 'fictional', business_date: demoBusinessDate, last_sequence: 0 }],
+      [SETTINGS, { ...metadata, setting_key: METADATA_KEY, last_sequence: 0 }],
     ])
   })
 }
 
-async function readCommittedInventory(transaction) {
+async function readCommittedInventory(transaction, profile) {
   const [rows, settings, metadata, queue] = await Promise.all([
     Promise.all(FIXTURE_STORES.map((name) => requestResult(transaction.objectStore(name).getAll()))),
     getSetting(transaction, EXPIRATION_SETTINGS_KEY),
-    getSetting(transaction, METADATA_KEY).then(verifyMetadata),
+    getSetting(transaction, METADATA_KEY).then(profile.verifyMetadata),
     requestResult(transaction.objectStore(QUEUE).getAll()),
   ])
   if (!settings) throw new InventoryDatabaseError('DB_INVALID_METADATA', 'The saved demonstration settings could not be found.')
   const snapshot = Object.fromEntries(FIXTURE_STORES.map((name, index) => [name, rows[index]]))
   snapshot.settings = settings.value
+  profile.decorateSnapshot?.(snapshot, metadata)
   reconstructStoredMovements(snapshot, queue, metadata.last_sequence)
   try {
-    summarizeInventory(snapshot, demoBusinessDate)
+    summarizeInventory(snapshot, metadata.business_date)
   } catch (error) {
     throw invalidLedger('The saved inventory could not be replayed.', error)
   }
@@ -100,26 +107,32 @@ function nextSequence({ last_sequence }) {
 }
 
 export function createPersistentInventoryRepository({
-  indexedDB,
   databaseName = DEMO_DATABASE_NAME,
   readInitialSnapshot = readDemoInventory,
-  createId = createBrowserId,
-  now = () => new Date().toISOString(),
-  onConnectionError = () => {},
+  ...options
 } = {}) {
   if (databaseName !== DEMO_DATABASE_NAME && (typeof databaseName !== 'string' ||
     !databaseName.startsWith(TEST_DATABASE_PREFIX) || databaseName.length === TEST_DATABASE_PREFIX.length)) {
     throw new InventoryDatabaseError('DB_INVALID_NAME', 'The fictional repository needs a demonstration database name.')
   }
+  return createInventoryRepository({ ...options, databaseName, readInitialSnapshot, profile: demoProfile })
+}
 
+// Both repository profiles use the same transaction, preview, and replay code.
+export function createInventoryRepository({
+  indexedDB, databaseName, readInitialSnapshot, profile,
+  createId = createBrowserId, now = () => new Date().toISOString(), onConnectionError = () => {},
+}) {
   let connection
   let connectionGeneration = 0
   const reservedAttemptIds = new Set()
   const stockPreviews = new Map()
+  const readInventory = (transaction) => readCommittedInventory(transaction, profile)
 
   function getConnection() {
     if (!connection) {
-      const opening = openInventoryDatabase({ name: databaseName, indexedDB }).then(async (database) => {
+      const open = profile.openStorage ?? openInventoryDatabase
+      const opening = open({ name: databaseName, indexedDB }).then(async (database) => {
         const reportClosure = (code, message) => {
           if (connection === opening) onConnectionError(new InventoryDatabaseError(code, message))
         }
@@ -130,7 +143,7 @@ export function createPersistentInventoryRepository({
           reportClosure('DB_CONNECTION_CLOSED', 'The browser closed local inventory storage.')
         }, { once: true })
         try {
-          await initialize(database, readInitialSnapshot)
+          await initialize(database, readInitialSnapshot, profile)
           return database
         } catch (error) {
           closeInventoryDatabase(database)
@@ -157,7 +170,7 @@ export function createPersistentInventoryRepository({
   async function read({ confirmationAttempt } = {}) {
     return runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', async (transaction) => {
       const [{ snapshot }, receipt] = await Promise.all([
-        readCommittedInventory(transaction),
+        readInventory(transaction),
         confirmationAttempt ? getSetting(transaction, STOCK_ATTEMPT_PREFIX + confirmationAttempt) : undefined,
       ])
       if (receipt) verifyStockReceipt(snapshot, confirmationAttempt, receipt.result)
@@ -168,26 +181,33 @@ export function createPersistentInventoryRepository({
   async function readStatus() {
     const database = await getConnection()
     return runTransaction(database, [SETTINGS, QUEUE], 'readonly', async (transaction) => {
-      const [metadata, queueCount] = await Promise.all([
-        getSetting(transaction, METADATA_KEY).then(verifyMetadata),
-        requestResult(transaction.objectStore(QUEUE).count()),
+      const store = transaction.objectStore(QUEUE)
+      const [metadata, records] = await Promise.all([
+        getSetting(transaction, METADATA_KEY).then(profile.verifyMetadata),
+        requestResult(profile.delivery ? store.index('local_sequence').getAll() : store.count()),
       ])
+      const queueCount = profile.delivery ? records.length : records
       if (queueCount !== metadata.last_sequence) throw invalidLedger('The saved queue and committed sequence disagree.')
-      return { schemaVersion: database.version, queueCount, revision: metadata.last_sequence }
+      const status = { schemaVersion: database.version, queueCount, revision: metadata.last_sequence }
+      if (profile.delivery) {
+        status.queue = profile.delivery.read(metadata, records)
+        status.businessDate = metadata.business_date
+      }
+      return status
     })
   }
 
   function writeOperation(transaction, writes, operation, metadata, sequence) {
     return writeRecords(transaction, [
       ...writes,
-      [QUEUE, buildDemoQueueRecord(operation, sequence, createId)],
+      [QUEUE, profile.buildQueueRecord(operation, sequence, createId)],
       [SETTINGS, { ...metadata, last_sequence: sequence }, 'put'],
     ])
   }
 
   async function mutateCatalog(type, args) {
     return runTransaction(await getConnection(), INVENTORY_STORES, 'readwrite', async (transaction) => {
-      const { snapshot, metadata } = await readCommittedInventory(transaction)
+      const { snapshot, metadata } = await readInventory(transaction)
       const category = type.endsWith('_category')
       const store = category ? 'categories' : 'inventory_items'
       if (args.expected) {
@@ -199,6 +219,7 @@ export function createPersistentInventoryRepository({
         }
       }
       const { record } = buildDemoCatalogCandidate(snapshot, type, { ...args, createId, now })
+      profile.validateCatalog?.(snapshot, type, record)
       await writeOperation(transaction, [[store, record, type.startsWith('create_') ? 'add' : 'put']],
         catalogOperation(type, record, snapshot), metadata, nextSequence(metadata))
       return record
@@ -207,7 +228,7 @@ export function createPersistentInventoryRepository({
 
   async function previewStockMovement(draft) {
     const generation = connectionGeneration
-    const { snapshot, metadata } = await runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', readCommittedInventory)
+    const { snapshot, metadata } = await runTransaction(await getConnection(), INVENTORY_STORES, 'readonly', readInventory)
     if (generation !== connectionGeneration) throw stalePreview()
     const { preview, result } = buildDemoStockPreview(snapshot, draft, { createId, reservedAttemptIds })
     reservedAttemptIds.add(result.attemptId)
@@ -226,7 +247,7 @@ export function createPersistentInventoryRepository({
     try {
       const result = await runTransaction(await getConnection(), INVENTORY_STORES, 'readwrite', async (transaction) => {
         const [{ snapshot, metadata }, receipt] = await Promise.all([
-          readCommittedInventory(transaction),
+          readInventory(transaction),
           getSetting(transaction, receiptKey),
         ])
         const preview = stockPreviews.get(attemptId)
@@ -241,7 +262,7 @@ export function createPersistentInventoryRepository({
         // candidate builder appends and replays in that same durable order.
         const sequence = nextSequence(metadata)
         const { result } = buildDemoStockCandidate(snapshot, preview.draft, {
-          ...preview.identifiers, timestamp: now(), businessDate: demoBusinessDate,
+          ...preview.identifiers, timestamp: now(), businessDate: metadata.business_date,
         })
         const writes = [
           ['stock_movements', { ...result.movement, demo_order: sequence }],
@@ -264,6 +285,19 @@ export function createPersistentInventoryRepository({
     read,
     readStatus,
     close,
+    ...(profile.delivery && {
+      withDeliveryQueue: async (work) => {
+        const database = await getConnection()
+        return work({
+          read: async () => (await readStatus()).queue,
+          recordDelivery: (entry, delivery) => runTransaction(database, [QUEUE], 'readwrite', async (transaction) => {
+            const store = transaction.objectStore(QUEUE)
+            const current = await requestResult(store.get(entry.command.operation_id))
+            await requestResult(store.put(profile.delivery.apply(current, entry, delivery)))
+          }),
+        })
+      },
+    }),
     previewStockMovement,
     recordStockMovement,
     discardStockPreview(attemptId) { stockPreviews.delete(attemptId) },
