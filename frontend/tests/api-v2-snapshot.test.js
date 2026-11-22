@@ -86,6 +86,16 @@ test('swapped commit sequences fail closed even if timestamps appear chronologic
   rejectProtocol(value)
 })
 
+test('a resealed withdrawal before its supplying batch fails chronological replay', () => {
+  const value = makeVerifiedV2Snapshot()
+  const [incoming, outgoing] = value.stock_movements
+  value.stock_movements = [
+    { ...outgoing, commit_seq: 3 },
+    { ...incoming, commit_seq: 4 },
+  ]
+  rejectProtocol(value)
+})
+
 test('a missing withdrawal allocation cannot inflate stock', () => {
   const value = makeVerifiedV2Snapshot()
   value.batch_allocations.pop()
@@ -143,6 +153,13 @@ test('v2 snapshot transport uses explicit /api/v2 and has no sync method', async
   assert.equal(data.installable, true)
   assert.equal(data.generation, value.server_generation_id)
   assert.equal(calls, 1)
+})
+
+test('FE-09C v2 client rejects remote HTTPS endpoints', () => {
+  assert.throws(
+    () => createIsolatedV2Client({ baseUrl: 'https://inventory.example.com' }),
+    /loopback/,
+  )
 })
 
 test('successful HTTP 200 with mismatched generation never becomes installable', async () => {

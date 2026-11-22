@@ -48,6 +48,11 @@ function failure(packet, information, now) {
 export function createIsolatedV2Client({ now = Date.now, ...options } = {}) {
   if (typeof now !== 'function') throw new TypeError('Configure a callable clock.')
   const request = createJsonRequest({ ...options, apiVersion: 2 })
+  // FE-09C is a local test-only path: never read an operational HTTPS host.
+  const target = new URL(options.baseUrl instanceof URL ? options.baseUrl.href : options.baseUrl)
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(target.hostname)) {
+    throw new TypeError('FE-09C requires a disposable loopback API endpoint.')
+  }
 
   async function read(path, validate, signal) {
     const packet = await request(path, { signal })

@@ -108,6 +108,60 @@ function v1Projection(data, authoritative) {
   }
 }
 
+function verifyStockChronology(data) {
+  // The server supplies an authoritative commit order. The client also checks
+  // each inventory prefix before accepting that order for isolated storage.
+  const batches = new Map(data.stock_batches.map((row) => [row.batch_id.toLowerCase(), row]))
+  const allocations = new Map()
+  for (const row of data.batch_allocations) {
+    const key = row.movement_id.toLowerCase()
+    if (!allocations.has(key)) allocations.set(key, [])
+    allocations.get(key).push(row)
+  }
+  const introduced = new Set()
+  const batchTotals = new Map()
+  const itemTotals = new Map()
+  const safe = BigInt(Number.MAX_SAFE_INTEGER)
+  for (const movement of data.stock_movements) {
+    const kind = movement.movement_type
+    const positive = kind === 'stock_in' || kind === 'initial_stock' ||
+      kind === 'positive_adjustment'
+    const itemId = movement.item_id.toLowerCase()
+    for (const allocation of allocations.get(movement.movement_id.toLowerCase()) ?? []) {
+      const bid = allocation.batch_id.toLowerCase()
+      const batch = batches.get(bid)
+      if (!batch) fail('snapshot.stock_batches')
+      if (!introduced.has(bid)) {
+        if (!positive || allocation.quantity_change !== batch.received_quantity ||
+            !equalTime(movement.created_at, batch.created_at)) {
+          fail('snapshot.stock_batches.introduction_order')
+        }
+        introduced.add(bid)
+        batchTotals.set(bid, 0n)
+      } else if (kind === 'initial_stock' || kind === 'stock_in') {
+        // A receipt movement may never introduce the same batch twice.
+        fail('snapshot.stock_batches.duplicate_introduction')
+      }
+      const next = batchTotals.get(bid) + BigInt(allocation.quantity_change)
+      if (next < 0n || next > safe) fail('snapshot.stock_batches.historical_balance')
+      batchTotals.set(bid, next)
+    }
+    const nextItem = (itemTotals.get(itemId) ?? 0n) + BigInt(movement.quantity_change)
+    if (nextItem < 0n || nextItem > safe) fail('snapshot.inventory_items.historical_balance')
+    itemTotals.set(itemId, nextItem)
+  }
+  for (const batch of data.stock_batches) {
+    if (batchTotals.get(batch.batch_id.toLowerCase()) !== BigInt(batch.remaining_quantity)) {
+      fail('snapshot.stock_batches.final_balance')
+    }
+  }
+  for (const item of data.inventory_items) {
+    if ((itemTotals.get(item.item_id.toLowerCase()) ?? 0n) !== BigInt(item.available_quantity)) {
+      fail('snapshot.inventory_items.final_balance')
+    }
+  }
+}
+
 /**
  * Inspect a v2 snapshot without changing existing FE-09B v1 parsing.
  * Returns installable=true ONLY for fully authoritative, coherent evidence.
@@ -184,6 +238,7 @@ export function validateV2Snapshot(data, requestedReceiptIds = []) {
   // derived-balance validation, even when v2's provisional order is withheld.
   validateSnapshot(v1Projection(data, authoritative),
     authoritative ? requestedReceiptIds : [])
+  if (authoritative) verifyStockChronology(data)
   return {
     data,
     installable: authoritative,
