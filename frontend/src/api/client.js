@@ -1,5 +1,5 @@
-import { adaptQueueCommand, isWireUuid, sameWireUuid } from './commands.js'
-import { ApiClientError, createJsonRequest, retryAfterDelay } from './http.js'
+import { adaptQueueCommand, isWireUuid, sameWireUuid, validateWireCommand } from './commands.js'
+import { ApiClientError, apiEndpoint, createJsonRequest, retryAfterDelay } from './http.js'
 import { ApiProtocolError, validateAcknowledgment, validateHealth, validateSnapshot } from './responses.js'
 
 export { ApiClientError } from './http.js'
@@ -116,7 +116,7 @@ function classify(packet, metadata, command, expectedGeneration, now) {
   return uncertain('http_failure')
 }
 
-export function createInventoryApiClient({ now = Date.now, ...options } = {}) {
+function createApiClient({ now = Date.now, ...options } = {}, prepareCommand, decodeAcknowledgment) {
   if (typeof now !== 'function') throw new TypeError('Configure a callable clock.')
   const request = createJsonRequest(options)
 
@@ -178,7 +178,7 @@ export function createInventoryApiClient({ now = Date.now, ...options } = {}) {
       }
       let command
       try {
-        command = adaptQueueCommand(record)
+        command = prepareCommand(record)
       } catch {
         throw new ApiClientError('invalid_command', { code: 'INVALID_QUEUE_COMMAND', outcome: 'not_sent' })
       }
@@ -186,8 +186,51 @@ export function createInventoryApiClient({ now = Date.now, ...options } = {}) {
         command,
         generation,
         signal,
-        validate: (data) => ({ data: validateAcknowledgment(data, command) }),
+        validate: (data) => ({ data: decodeAcknowledgment(data, command) }),
       })
+    },
+  })
+}
+
+export function createInventoryApiClient(options) {
+  return createApiClient(options, adaptQueueCommand, validateAcknowledgment)
+}
+
+function validateV2Acknowledgment(data, command) {
+  if (!isObject(data) || !Object.hasOwn(data, 'commit_seq') || !Object.hasOwn(data, 'replay_status')) {
+    throw new ApiProtocolError('acknowledgment')
+  }
+  const { commit_seq, replay_status, ...v1Fields } = data
+  validateAcknowledgment(v1Fields, command)
+  if (replay_status === 'provisional' && commit_seq === null) {
+    throw new ApiClientError('recovery_required', {
+      code: 'PROVISIONAL_HISTORY', status: 200, outcome: 'unknown', retry: 'pause',
+    })
+  }
+  if (replay_status !== 'verified' || !Number.isSafeInteger(commit_seq) || commit_seq < 1) {
+    throw new ApiProtocolError('acknowledgment.commit_seq')
+  }
+  return data
+}
+
+export function createIsolatedV2SyncClient({ baseUrl, ...options } = {}) {
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(apiEndpoint(baseUrl).hostname)) {
+    throw new TypeError('FE-09D requires a disposable loopback API endpoint.')
+  }
+  const { sync } = createApiClient({ ...options, baseUrl, apiVersion: 2 },
+    validateWireCommand, validateV2Acknowledgment)
+  return Object.freeze({
+    async sync(command, { generation, settingsVersion, signal } = {}) {
+      if (!Number.isSafeInteger(settingsVersion) || settingsVersion < 1) {
+        throw new ApiClientError('invalid_command', { code: 'INVALID_SETTINGS_VERSION', outcome: 'not_sent' })
+      }
+      const reply = await sync(command, { generation, signal })
+      if (reply.settingsVersion !== settingsVersion) {
+        throw new ApiClientError('recovery_required', {
+          code: 'SETTINGS_VERSION_MISMATCH', status: 200, outcome: 'unknown', retry: 'pause',
+        })
+      }
+      return reply
     },
   })
 }
