@@ -129,12 +129,16 @@ function cancelUnreadBody(response) {
 
 export function createJsonRequest({
   baseUrl,
+  apiVersion = 1,
   fetch: transport = (...args) => globalThis.fetch(...args),
   timeoutMs = DEFAULT_TIMEOUT_MS,
   setTimer = globalThis.setTimeout.bind(globalThis),
   clearTimer = globalThis.clearTimeout.bind(globalThis),
 }) {
+  // The v1 endpoint remains the default; v2 is an explicit, isolated opt-in.
+  if (apiVersion !== 1 && apiVersion !== 2) throw new TypeError('Unsupported API version.')
   const endpoint = apiEndpoint(baseUrl)
+  if (apiVersion === 2) endpoint.pathname = '/api/v2/'
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new RangeError('Request timeout must be 1–120,000 milliseconds.')
   }
