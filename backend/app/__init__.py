@@ -34,8 +34,9 @@ def create_app(overrides=None):
     app.extensions["session_factory"] = factory
     _seed_settings(app, factory)
 
-    from .api import bp
+    from .api import bp, bp_v2
     app.register_blueprint(bp)
+    app.register_blueprint(bp_v2)
     return app
 
 
