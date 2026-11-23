@@ -66,7 +66,9 @@ function wireCommand({ operation_id, operation_type, entity_id, payload, created
 function deliveryEntry(row) {
   if (row?.dataset !== DATASET) throw invalidLedger('The integration queue contains an unexpected record.')
   const { status, resolution_status, acknowledgment, last_error, retry_at } = row
-  return { command: wireCommand(row), status, resolution_status, acknowledgment, last_error, retry_at }
+  // An earlier adapter omitted the previous count, so failed deliveries stored NaN.
+  const retry_count = Number.isNaN(row.retry_count) ? 1 : row.retry_count
+  return { command: wireCommand(row), status, resolution_status, acknowledgment, last_error, retry_at, retry_count }
 }
 
 const delivery = {
@@ -80,11 +82,11 @@ const delivery = {
   },
   apply(current, entry, update) {
     const saved = deliveryEntry(current)
-    if (saved.status !== 'pending' || saved.resolution_status !== 'none' ||
+    if (saved.status !== 'pending' || saved.resolution_status !== 'none' || saved.acknowledgment !== null ||
         JSON.stringify(saved.command) !== JSON.stringify(entry.command)) {
       throw invalidLedger('The pending integration command changed during delivery.')
     }
-    return { ...current, ...update }
+    return { ...current, retry_count: saved.retry_count, ...update }
   },
 }
 

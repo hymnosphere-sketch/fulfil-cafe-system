@@ -33,6 +33,9 @@ function instrumentNetwork() {
           packet.data.server_generation_id = '00000000-0000-4000-8000-000000009999'
         } else if (window.snapshotOverride === 'schema') {
           packet.data.schema_version = 3
+        } else if (window.snapshotOverride === 'settings') {
+          packet.data.settings.settings_version++
+          headers.set('X-Inventory-Settings-Version', String(packet.data.settings.settings_version))
         } else {
           packet.data = window.snapshotOverride
         }
@@ -99,6 +102,27 @@ const commandOnly = ({ operation_id, operation_type, entity_id, payload, created
   ({ operation_id, operation_type, entity_id, payload, created_at, local_sequence })
 const metadata = (stores) => stores.application_settings.find(({ setting_key }) => setting_key === 'demo_repository')
 const readServer = (baseUrl, receiptIds = []) => createIsolatedV2Client({ baseUrl }).snapshot({ receiptIds })
+
+function changeSavedQueueRow(tab, operationId, change) {
+  async function update(id, transform) {
+    const { INTEGRATION_DATABASE_PREFIX } = await import('/src/data/integration-inventory-repository.js')
+    const { closeInventoryDatabase, openInventoryDatabase, requestResult, runTransaction } = await import('/src/db/database.js')
+    const fixture = new URL(location.href).searchParams.get('fixture')
+    if (!fixture) throw new Error('A disposable integration fixture is required.')
+    const db = await openInventoryDatabase({ name: INTEGRATION_DATABASE_PREFIX + fixture })
+    try {
+      await runTransaction(db, ['synchronization_queue'], 'readwrite', async (tx) => {
+        const store = tx.objectStore('synchronization_queue')
+        const row = await requestResult(store.get(id))
+        if (!row || row.dataset !== 'fe09f-fictional-integration') throw new Error('Integration queue row missing.')
+        await requestResult(store.put(transform(row)))
+      })
+    } finally {
+      closeInventoryDatabase(db)
+    }
+  }
+  return tab.evaluate('(' + update.toString() + ')(' + quote(operationId) + ', ' + change.toString() + ')')
+}
 
 async function quiet(page) {
   const network = await page.evaluate('window.api')
@@ -358,7 +382,13 @@ await withIntegrationEnvironment(async ({ app, production, urls, page, restartCh
       assert.equal(queue(saved)[3].acknowledgment, null)
       assert.equal((await readServer(urls.offline)).data.inventory_items[0].available_quantity, 20)
       await synchronize(offline, 'temporary_failure')
-      assert.equal(queue(await dumpStores(offline))[3].status, 'pending')
+      const attempt = queue(await dumpStores(offline))[3]
+      assert.equal(attempt.status, 'pending')
+      assert.equal(attempt.retry_count, 1)
+      // Earlier FE-09F builds stored NaN when the adapter omitted the previous count.
+      await changeSavedQueueRow(offline, attempt.operation_id, (row) => ({ ...row, retry_count: NaN }))
+      await synchronize(offline, 'temporary_failure')
+      assert.equal(queue(await dumpStores(offline))[3].retry_count, 2)
     } finally {
       await setOffline(false)
     }
@@ -569,6 +599,126 @@ await withIntegrationEnvironment(async ({ app, production, urls, page, restartCh
     assert.equal(final.data.stock_movements.at(-1).commit_seq, 5)
     assert.equal(final.data.inventory_items[0].available_quantity, 13)
     assert.equal(ordered[1].payload.unit_of_measurement, 'kg')
+    await tab.close()
+  })
+
+  await test('FE-09G: a receipt write abort preserves ordered retry after an overlapping tab and a reload', async () => {
+    const tab = await fresh()
+    await initialize(tab, urls.receipt_abort)
+    await createCategory(tab, 'Interrupted receipt supplies')
+    await createItem(tab, (await dumpStores(tab)).categories[0].category_id, 'Interrupted receipt cups')
+    await synchronize(tab)
+    const itemId = (await dumpStores(tab)).inventory_items[0].item_id
+    await prepareStock(tab, 'receive', itemId, 20)
+    await confirmStock(tab, 20)
+    await prepareStock(tab, 'usage', itemId, 5, { batch: (await dumpStores(tab)).stock_batches[0].batch_id })
+    await confirmStock(tab, 15)
+    const before = await dumpStores(tab)
+    const [incoming, outgoing] = queue(before).slice(2).map(commandOnly)
+    await route(tab, 'settings')
+    await evaluate(tab, (operationId) => {
+      const put = IDBObjectStore.prototype.put
+      window.holdPost = true
+      IDBObjectStore.prototype.put = function (row, ...keys) {
+        const request = put.call(this, row, ...keys)
+        if (this.name === 'synchronization_queue' && row.operation_id === operationId &&
+            row.status === 'synchronized' && row.acknowledgment?.replay_status === 'verified') {
+          IDBObjectStore.prototype.put = put
+          const transaction = this.transaction
+          queueMicrotask(() => transaction.abort())
+        }
+        return request
+      }
+    }, incoming.operation_id)
+    await tab.click(syncButton)
+    await waitSync(tab, 'synchronizing')
+    await tab.until('typeof window.releasePost === "function"', 'receiving request held by first tab')
+    const other = await page(observers)
+    try {
+      await other.goto(await tab.evaluate('location.href'))
+      await waitSync(other, 'pending')
+      await synchronize(other, 'unavailable')
+      await hasText(other, '[data-app-sync-panel]', 'Another window is using synchronization')
+      await quiet(other)
+    } finally {
+      await other.close()
+      await tab.evaluate('window.holdPost = false; window.releasePost()')
+    }
+    await waitSync(tab, 'unavailable')
+    await hasText(tab, '[data-sync-pending]', '2')
+    assert.deepEqual(await dumpStores(tab), before)
+    assert.deepEqual((await tab.evaluate('window.api')).posts.slice(2).map(({ command }) => command), [incoming])
+    const partial = (await readServer(urls.receipt_abort, [incoming.operation_id, outgoing.operation_id])).data
+    assert.deepEqual(partial.receipt_checks.map(({ status }) => status), ['accepted', 'missing'])
+    assert.equal(partial.inventory_items[0].available_quantity, 20)
+
+    await tab.reload()
+    await waitSync(tab, 'pending')
+    await quiet(tab)
+    assert.deepEqual(await dumpStores(tab), before)
+    await synchronize(tab)
+    assert.deepEqual((await tab.evaluate('window.api')).posts.map(({ command }) => command), [incoming, outgoing])
+    const saved = await dumpStores(tab)
+    assert.equal(queue(saved)[2].acknowledgment.outcome, 'already_processed')
+    assert.equal(queue(saved)[2].acknowledgment.commit_seq, partial.receipt_checks[0].commit_seq)
+    const final = (await readServer(urls.receipt_abort)).data
+    compareInventory(saved, final)
+    assert.equal(final.inventory_items[0].available_quantity, 15)
+    assert.equal(final.stock_movements.length, 2)
+    assert.equal(final.sync.last_commit_seq, 4)
+    await tab.close()
+  })
+
+  await test('FE-09G: an inconsistent saved receipt hides success after reload and keeps local inventory usable', async () => {
+    const tab = await fresh()
+    await initialize(tab, urls.saved_receipt)
+    await createCategory(tab, 'Saved receipt supplies')
+    await synchronize(tab)
+    const saved = await dumpStores(tab)
+    const [row] = queue(saved)
+    await changeSavedQueueRow(tab, row.operation_id, (entry) => ({
+      ...entry, acknowledgment: { ...entry.acknowledgment, result: { ...entry.acknowledgment.result, name: 'Mismatched name' } },
+    }))
+    await tab.reload()
+    await waitSync(tab, 'unavailable')
+    await hasText(tab, '[data-app-sync-panel]', 'Sync status unavailable')
+    assert.equal(await tab.evaluate('!!document.querySelector("[data-sync-last-success] time")'), false)
+    assert.equal(await tab.evaluate('document.querySelector(' + quote(syncButton) + ').disabled'), true)
+    await route(tab, 'dashboard')
+    await hasText(tab, '[data-app-sync-summary]', 'Sync status unavailable')
+    await createItem(tab, saved.categories[0].category_id, 'Local work after unreadable receipt')
+    const after = await dumpStores(tab)
+    assert.deepEqual(after.categories, saved.categories)
+    assert.deepEqual(commandOnly(queue(after)[0]), commandOnly(row))
+    assert.equal(queue(after)[1].status, 'pending')
+    await route(tab, 'settings')
+    assert.equal(await tab.evaluate('document.querySelector(' + quote(syncButton) + ').disabled'), true)
+    await quiet(tab)
+    assert.equal((await readServer(urls.saved_receipt)).data.inventory_items.length, 0)
+    await tab.close()
+  })
+
+  await test('FE-09G: verified settings mismatch preserves pending work and blocks POST after reload', async () => {
+    const tab = await fresh()
+    await initialize(tab, urls.settings)
+    await createCategory(tab, 'Saved settings supplies')
+    await synchronize(tab)
+    await createItem(tab, (await dumpStores(tab)).categories[0].category_id, 'Settings pause cups')
+    const before = await dumpStores(tab)
+    await tab.evaluate('window.snapshotOverride = "settings"')
+    await synchronize(tab, 'recovery_required')
+    const paused = await dumpStores(tab)
+    assert.deepEqual(paused.inventory_items, before.inventory_items)
+    assert.deepEqual(paused.application_settings, before.application_settings)
+    assert.deepEqual(queue(paused).map(commandOnly), queue(before).map(commandOnly))
+    assert.equal(queue(paused)[1].last_error.code, 'SETTINGS_VERSION_MISMATCH')
+    assert.equal(queue(paused)[1].status, 'pending')
+    assert.equal((await tab.evaluate('window.api')).posts.length, 1)
+    await tab.reload()
+    await waitSync(tab, 'recovery_required')
+    assert.equal(await tab.evaluate('document.querySelector(' + quote(syncButton) + ').disabled'), true)
+    await quiet(tab)
+    assert.deepEqual(await dumpStores(tab), paused)
     await tab.close()
   })
 })

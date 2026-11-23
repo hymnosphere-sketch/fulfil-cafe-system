@@ -69,7 +69,7 @@ export async function withIsolatedV2Queue(options, work) {
         return runTransaction(db, [QUEUE], 'readwrite', async (tx) => {
           const queue = tx.objectStore(QUEUE)
           const current = await requestResult(queue.get(entry.command.operation_id))
-          if (current?.status !== 'pending' || current.resolution_status !== 'none' ||
+          if (current?.status !== 'pending' || current.resolution_status !== 'none' || current.acknowledgment !== null ||
               JSON.stringify(current.command) !== JSON.stringify(entry.command)) {
             throw new Error('The pending queue entry changed during delivery.')
           }

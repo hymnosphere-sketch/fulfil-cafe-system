@@ -4,7 +4,13 @@ import { renderSyncBadge, renderSyncPanel, renderSyncSummary } from '../src/comp
 import { createSyncStatusRefresh, deriveSyncStatus } from '../src/services/sync-status.js'
 import { id, queueCommands } from './fixtures/api-v2-queue.mjs'
 
-const { ordered } = queueCommands()
+const { ordered, category, item } = queueCommands()
+const results = [
+  { ...category.payload, normalized_name: 'fictional supplies', description: null, is_active: true,
+    created_at: category.created_at, updated_at: category.created_at },
+  { ...item.payload, normalized_name: 'fictional cups', is_active: true, available_quantity: 0,
+    stock_status: 'out_of_stock', created_at: item.created_at, updated_at: item.created_at },
+]
 const generation = id(99)
 const settingsVersion = 1
 const earlier = '2026-11-19T03:00:00Z'
@@ -12,12 +18,12 @@ const later = '2026-11-19T04:00:00Z'
 const now = Date.parse(later)
 const queue = (...operations) => ({ generation, settingsVersion, operations })
 const pending = (index = 0, fields = {}) => ({ command: ordered[index], status: 'pending',
-  resolution_status: 'none', retry_at: null, last_error: null, ...fields })
+  resolution_status: 'none', acknowledgment: null, retry_at: null, last_error: null, ...fields })
 const confirmed = (index, processed_at, fields = {}) => ({
   ...pending(index), status: 'synchronized', last_attempt_at: '2026-11-20T00:00:00Z',
   acknowledgment: { operation_id: ordered[index].operation_id, processed_at, outcome: 'accepted',
     replay_status: 'verified', commit_seq: index + 1, server_generation_id: generation,
-    settings_version: settingsVersion, ...fields },
+    settings_version: settingsVersion, result: results[index], ...fields },
 })
 const view = (records, options) => deriveSyncStatus({ configured: true, queue: records, now, ...options })
 
@@ -53,13 +59,29 @@ test('fully synchronized requires verified receipts and displays the newest conf
   for (const fields of [
     { operation_id: id(1000) }, { replay_status: 'provisional' }, { commit_seq: null },
     { server_generation_id: id(1000) }, { settings_version: 2 }, { outcome: 'rejected' },
-    { processed_at: 'invalid' },
+    { processed_at: 'invalid' }, { result: null },
+    { result: { ...results[0], category_id: id(1000) } },
   ]) {
     const invalid = view(queue(confirmed(0, earlier, fields)))
     assert.equal(invalid.state, 'unavailable')
     assert.equal(invalid.lastConfirmed, null)
     assert.notEqual(invalid.counts?.synchronized, 1)
   }
+})
+
+test('saved confirmations must precede pending work and advance the initialized commit position', () => {
+  assert.equal(view({ ...queue(confirmed(0, earlier)), initialCommit: 1 }).state, 'unavailable')
+  assert.equal(view(queue(confirmed(0, earlier), confirmed(1, later, { commit_seq: 1 }))).state, 'unavailable')
+  assert.equal(view(queue(pending(), confirmed(1, later))).state, 'unavailable')
+})
+
+test('pending and rejected rows cannot carry saved confirmations', () => {
+  const { acknowledgment } = confirmed(0, earlier)
+  assert.equal(view(queue(pending(0, { acknowledgment }))).state, 'unavailable')
+  const rejected = pending(1, { status: 'failed', resolution_status: 'needs_review' })
+  assert.equal(view(queue({ ...rejected, acknowledgment })).state, 'unavailable')
+  assert.equal(view(queue(pending(), rejected)).state, 'unavailable')
+  assert.equal(view(queue(pending(0, { resolution_status: 'needs_review' }))).state, 'unavailable')
 })
 
 test('retry eligibility changes with time and promises only a manual retry', () => {
