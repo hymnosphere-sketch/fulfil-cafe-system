@@ -89,7 +89,7 @@ function itemMetadata(snapshot, input, existing, duplicateApproval) {
   }
 
   const unit = input.unit_of_measurement === undefined ? existing?.unit_of_measurement : input.unit_of_measurement
-  if (!demoUnits.includes(unit)) {
+  if (!(snapshot.quantityUnits ?? demoUnits).includes(unit)) {
     throw new DemoRepositoryError('VALIDATION', 'Choose a unit from the demonstration list.', { field: 'unit_of_measurement' })
   }
   if (existing && unit !== existing.unit_of_measurement && (
@@ -107,7 +107,7 @@ function itemMetadata(snapshot, input, existing, duplicateApproval) {
     idField: 'item_id',
   })
   if (matches.length) {
-    const { itemBalances } = summarizeInventory(snapshot, demoBusinessDate)
+    const { itemBalances } = summarizeInventory(snapshot, snapshot.businessDate ?? demoBusinessDate)
     const categories = new Map(snapshot.categories.map((category) => [category.category_id, category.name]))
     const reviewedMatches = matches.map(({ record: item, reason }) => ({
       itemId: item.item_id,
@@ -148,13 +148,15 @@ function categoryMetadata(snapshot, input, existing) {
     throw new DemoRepositoryError('VALIDATION', 'Enter a description as text or leave it blank.', { field: 'description' })
   }
   // Demo category names are reserved by both active and archived records. Production policy is pending.
-  const matches = findDemoNameMatches(snapshot.categories, name, {
+  const categories = snapshot.quantityUnits ? snapshot.categories.filter(({ is_active }) => is_active) : snapshot.categories
+  const matches = findDemoNameMatches(categories, name, {
     excludeId: existing?.category_id,
     idField: 'category_id',
   })
   if (matches.length) {
-    throw new DemoRepositoryError('DUPLICATE_CATEGORY',
-      'The demo requires a different name from every active or archived category.', { field: 'name' })
+    throw new DemoRepositoryError('DUPLICATE_CATEGORY', snapshot.quantityUnits
+      ? 'An active category already uses this name.'
+      : 'The demo requires a different name from every active or archived category.', { field: 'name' })
   }
 
   return {
@@ -186,7 +188,7 @@ const catalogOperations = {
   },
   archive_item(candidate, { id, now }) {
     const item = findActiveRecord(candidate.inventory_items, 'item_id', id, 'item')
-    const { itemBalances } = summarizeInventory(candidate, demoBusinessDate)
+    const { itemBalances } = summarizeInventory(candidate, candidate.businessDate ?? demoBusinessDate)
     if (itemBalances.get(id) !== 0) {
       throw new DemoRepositoryError('ITEM_HAS_STOCK', 'The demo allows archival only when the item has zero stock.')
     }
@@ -236,7 +238,7 @@ export function buildDemoCatalogCandidate(snapshot, operationType, {
   }
   const candidate = structuredClone(snapshot)
   const record = catalogOperations[operationType](candidate, { id, input, duplicateApproval, createId, now })
-  summarizeInventory(candidate, demoBusinessDate)
+  summarizeInventory(candidate, candidate.businessDate ?? demoBusinessDate)
   return { candidate, record }
 }
 
@@ -246,7 +248,7 @@ export function buildDemoStockPreview(snapshot, draft, {
   createId = createBrowserId,
   reservedAttemptIds = [],
 } = {}) {
-  const plan = validateDemoStockMovement(snapshot, draft, demoBusinessDate)
+  const plan = validateDemoStockMovement(snapshot, draft, snapshot.businessDate ?? demoBusinessDate)
   const usedMovementIds = recordIds(snapshot.stock_movements, 'movement_id')
   for (const id of reservedAttemptIds) usedMovementIds.add(id)
   const movementId = createUniqueId(createId, usedMovementIds)

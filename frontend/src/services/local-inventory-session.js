@@ -14,13 +14,13 @@ const closedStorage = new Set([
   'DB_UNAVAILABLE', 'DB_INVALID_METADATA', 'DB_INTEGRITY', 'DB_UNMARKED_DATA',
 ])
 
-export function createLocalInventorySession({ onUpdate, onCommit }) {
+export function createLocalInventorySession({ onUpdate, onCommit, createRepository = createPersistentInventoryRepository }) {
   let state = 'opening'
   let generation = 0
   let statusRequest = 0
   let refreshRequested = false
   let confirmationToRecheck
-  const storage = createPersistentInventoryRepository({ onConnectionError: fail })
+  const storage = createRepository({ onConnectionError: fail })
 
   function publish(detail, refreshViews = false) {
     state = detail.state
@@ -105,5 +105,5 @@ export function createLocalInventorySession({ onUpdate, onCommit }) {
     discardStockPreview: storage.discardStockPreview,
     ...Object.fromEntries(mutationMethods.map((method) => [method, trackMutation(method)])),
   }
-  return { repository, initialize, refresh }
+  return { repository, initialize, refresh, withDeliveryQueue: storage.withDeliveryQueue }
 }

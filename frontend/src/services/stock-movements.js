@@ -163,7 +163,7 @@ export function validateDemoStockMovement(snapshot, draft, businessDate = demoBu
   if (!supportedTypes.has(type)) {
     throw new DemoStockError('INVALID_MOVEMENT_TYPE', 'Choose a supported demo stock movement.', 'type')
   }
-  if (unit !== item.unit_of_measurement || !demoUnits.includes(unit)) {
+  if (unit !== item.unit_of_measurement || !(snapshot.quantityUnits ?? demoUnits).includes(unit)) {
     throw new DemoStockError('INVALID_UNIT', 'Use the unit assigned to the selected item.', 'unit')
   }
   if (scale !== DEMO_UNIT_SCALE) {

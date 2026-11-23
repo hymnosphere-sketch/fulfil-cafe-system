@@ -18,14 +18,15 @@ function isValidCorrection(draft, model, module) {
   const { field } = draft.error
   const value = draft.values[field]
   if (field === 'name') {
+    const categories = model.quantityUnits ? model.categories.filter(({ isActive }) => isActive) : model.categories
     return Boolean(cleanDemoName(value)) && (module === 'inventory' ||
-      findDemoNameMatches(model.categories, value, { idField: 'categoryId', excludeId: draft.id }).length === 0)
+      findDemoNameMatches(categories, value, { idField: 'categoryId', excludeId: draft.id }).length === 0)
   }
   if (field === 'minimum_stock_level') return parseDemoMinimumStockLevel(value) !== null
   if (field === 'category_id') return model.categoryById.get(value)?.isActive === true
   if (field === 'unit_of_measurement') {
     const item = model.itemById.get(draft.id)
-    return demoUnits.includes(value) && (!item?.hasHistory || item.unit === value)
+    return (model.quantityUnits ?? demoUnits).includes(value) && (!item?.hasHistory || item.unit === value)
   }
   return field === 'description' && typeof value === 'string'
 }
@@ -86,7 +87,7 @@ function renderItemFields({ values, error, inlineCategory }, model, item) {
   const categoryOptions = [['', 'Choose an active category'], ...availableCategories.map(({ categoryId, name }) => [categoryId, name]),
     [CREATE_CATEGORY_OPTION, '+ Create new category']]
   const selectedName = model.categoryById.get(values.category_id)?.name
-  const unitOptions = [['', 'Choose a unit'], ...demoUnits.map((unit) => [unit, unit])]
+  const unitOptions = [['', 'Choose a unit'], ...(model.quantityUnits ?? demoUnits).map((unit) => [unit, unit])]
   return `
     ${renderFormField({ name: 'name', label: 'Item name', value: values.name, error, required: true })}
     ${renderFormField({ name: 'category_id', label: 'Category', value: inlineCategory ? CREATE_CATEGORY_OPTION : values.category_id,
@@ -100,18 +101,19 @@ function renderItemFields({ values, error, inlineCategory }, model, item) {
   `
 }
 
-function renderCategoryFields({ values, error }, prefix) {
-  return renderFormField({ name: 'name', label: 'Category name', value: values.name, error, required: true, help: categoryHelp, prefix }) +
+function renderCategoryFields({ values, error }, prefix, integrated) {
+  return renderFormField({ name: 'name', label: 'Category name', value: values.name, error, required: true,
+    help: integrated ? 'Use a name that no active category already uses.' : categoryHelp, prefix }) +
     renderFormField({ name: 'description', label: 'Description (optional)', value: values.description, error, multiline: true, prefix })
 }
 
-function renderInlineCategory(category) {
+function renderInlineCategory(category, integrated) {
   return `<form class="inventory-inline-category" data-inline-category-form aria-labelledby="inline-category-title" novalidate>
     <fieldset class="inventory-stack"${category.busy ? ' disabled' : ''}>
       <h3 id="inline-category-title" class="mb-0">Create new category</h3>
       <p class="cafe-muted cafe-supporting mb-0">The category stays saved even if you cancel the item.</p>
       ${category.error && !category.error.field ? `<p class="text-danger mb-0" role="alert" tabindex="-1" data-inline-category-error>${escapeInventoryText(category.error.message)}</p>` : ''}
-      ${renderCategoryFields(category, 'demo-inline-category')}
+      ${renderCategoryFields(category, 'demo-inline-category', integrated)}
       <div class="inventory-actions">
         <button class="btn btn-primary" type="submit">${category.busy ? 'Creating…' : 'Create category'}</button>
         <button class="btn btn-outline-primary" type="button" data-inventory-action="cancel-inline-category" aria-label="Cancel category creation">Cancel</button>
@@ -155,7 +157,7 @@ export function renderRecordForm({ module, draft, model }) {
   const itemHelp = item
     ? `Available quantity is read-only: <strong>${renderInventoryQuantity(item.availableQuantity, item.unit)}</strong>. Stock changes require a separate transaction.`
     : 'A new item starts with zero stock. After saving the item, use Receive stock to record a delivery.'
-  const fields = isItem ? renderItemFields(draft, model, item) : renderCategoryFields(draft)
+  const fields = isItem ? renderItemFields(draft, model, item) : renderCategoryFields(draft, undefined, model.quantityUnits)
   const categoryFeedback = isItem ? inlineCategoryFeedback(draft, model) : ''
 
   return `<section class="card cafe-card inventory-form-panel" aria-labelledby="record-form-title">
@@ -175,7 +177,7 @@ export function renderRecordForm({ module, draft, model }) {
           ${isItem ? renderDuplicateWarning(draft) : ''}`}
         </fieldset>
       </form>
-      ${draft.inlineCategory ? renderInlineCategory(draft.inlineCategory) : ''}
+      ${draft.inlineCategory ? renderInlineCategory(draft.inlineCategory, model.quantityUnits) : ''}
     </div>
   </section>`
 }

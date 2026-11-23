@@ -28,7 +28,7 @@ function groupRecordsByItem(records) {
 
 // Derive balances once from movements and batch allocations. Maps associate each
 // category, batch, and movement with its item without scanning history per row.
-export function buildInventoryReadModel(snapshot, businessDate = demoBusinessDate) {
+export function buildInventoryReadModel(snapshot, businessDate = snapshot.businessDate ?? demoBusinessDate) {
   const summary = summarizeInventory(snapshot, businessDate)
   const activeCounts = countActiveItemsByCategory(snapshot.inventory_items)
   const categories = snapshot.categories.map((category) => ({
@@ -97,6 +97,7 @@ export function buildInventoryReadModel(snapshot, businessDate = demoBusinessDat
     categoryById,
     summary,
     businessDate,
+    quantityUnits: snapshot.quantityUnits,
     // Use the fictional fixture's timezone for display when settings are absent.
     businessTimezone: snapshot.settings?.business_timezone ?? demoInventory.settings.business_timezone,
     warningDays: snapshot.settings?.expiration_warning_days ?? null,

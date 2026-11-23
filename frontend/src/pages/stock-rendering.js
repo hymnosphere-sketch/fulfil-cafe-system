@@ -374,7 +374,8 @@ export function renderStockSuccess(result, storageMode) {
   return `<section class="stock-stack" aria-labelledby="stock-result-heading">
     <h2 id="stock-result-heading" class="mb-0" data-stock-heading tabindex="-1">Movement recorded</h2>
     <div role="status">${renderMessage({
-      tone: 'success', icon: 'info', title: isolated ? 'Temporary demo inventory updated' : 'Local demo inventory updated',
+      tone: 'success', icon: 'info', title: storageMode === 'integration' ? 'Local integration inventory updated'
+        : isolated ? 'Temporary demo inventory updated' : 'Local demo inventory updated',
       message: isolated ? 'Stock movement saved in this temporary session.' : 'Stock movement saved in this browser.',
     })}</div>
     <div class="stock-actions">

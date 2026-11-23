@@ -1,4 +1,7 @@
 export function demoStorageNotice(storageMode) {
+  if (storageMode === 'integration') {
+    return 'These fictional changes are saved in this browser. Use Synchronize now in Settings to send pending work to the disposable Flask fixture.'
+  }
   if (storageMode === 'isolated') {
     return 'This isolated demonstration uses a temporary copy in this tab. Refreshing starts a new temporary session.'
   }
