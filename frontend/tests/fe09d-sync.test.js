@@ -2,12 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createIsolatedV2SyncClient } from '../src/api/client.js'
 import { createIsolatedV2Client } from '../src/api/v2-client.js'
+import { drainOrderedV2Queue } from '../src/services/v2-ordered-sync.js'
+import { makeVerifiedV2Snapshot } from './fixtures/api-v2-initialization.mjs'
 import { at, id, queueCommands } from './fixtures/api-v2-queue.mjs'
 
 const baseUrl = 'http://127.0.0.1:5099'
 const generation = id(99)
 const options = { generation, settingsVersion: 1 }
-const { category } = queueCommands()
+const { category, item } = queueCommands()
 const accepted = {
   operation_id: category.operation_id, outcome: 'accepted', processed_at: at, commit_seq: 1, replay_status: 'verified',
   result: { ...category.payload, normalized_name: 'fictional supplies', description: null,
@@ -115,4 +117,61 @@ test('a timeout or interruption after send keeps the v2 outcome unknown', async 
   const pending = interruptedClient.sync(category, { ...options, signal: controller.signal })
   controller.abort()
   await assert.rejects(pending, error('cancelled', { outcome: 'unknown' }))
+})
+
+test('a saved acknowledgment must match its original command and queue before delivery can continue', async (t) => {
+  const previousLocks = Object.getOwnPropertyDescriptor(navigator, 'locks')
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: (_name, _options, run) => run({}) } })
+  t.after(() => {
+    if (previousLocks) Object.defineProperty(navigator, 'locks', previousLocks)
+    else delete navigator.locks
+  })
+
+  const snapshot = makeVerifiedV2Snapshot()
+  snapshot.server_generation_id = generation
+  const itemReceipt = { ...accepted, operation_id: item.operation_id, commit_seq: 5, result: {
+    ...item.payload, normalized_name: 'fictional cups', is_active: true, available_quantity: 0,
+    stock_status: 'out_of_stock', created_at: at, updated_at: at,
+  } }
+  const receipt = { ...accepted, server_generation_id: generation, settings_version: options.settingsVersion }
+
+  async function drain(acknowledgment, pendingAcknowledgment = null) {
+    const operations = [
+      { command: category, status: 'synchronized', resolution_status: 'none', acknowledgment },
+      { command: item, status: 'pending', resolution_status: 'none', retry_count: 0, acknowledgment: pendingAcknowledgment },
+    ]
+    const requests = []
+    const writes = []
+    const result = await drainOrderedV2Queue({
+      baseUrl,
+      withQueue: (work) => work({
+        read: async () => ({ ...options, operations, initialCommit: 0 }),
+        recordDelivery: async (entry, delivery) => { writes.push({ entry, delivery }) },
+      }),
+      fetch: (url, request) => {
+        requests.push(request.method)
+        return url.pathname === '/api/v2/snapshot' ? success(snapshot) : success(itemReceipt)
+      },
+    })
+    return { result, requests, writes }
+  }
+
+  const valid = await drain(receipt)
+  assert.deepEqual(valid.result, { status: 'complete', synchronized: 1 })
+  assert.deepEqual(valid.requests, ['GET', 'POST'])
+  assert.equal(valid.writes[0].delivery.acknowledgment.operation_id, item.operation_id)
+
+  for (const change of [
+    { result: { ...accepted.result, category_id: id(1000) } },
+    { server_generation_id: id(1000) },
+    { settings_version: options.settingsVersion + 1 },
+    { replay_status: 'provisional', commit_seq: null },
+  ]) {
+    assert.deepEqual(await drain({ ...receipt, ...change }), {
+      result: { status: 'storage_failure', synchronized: 0, code: null }, requests: [], writes: [],
+    })
+  }
+  assert.deepEqual(await drain(receipt, itemReceipt), {
+    result: { status: 'storage_failure', synchronized: 0, code: null }, requests: [], writes: [],
+  })
 })

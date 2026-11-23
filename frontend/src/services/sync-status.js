@@ -1,4 +1,4 @@
-import { isWireTimestamp, sameWireUuid } from '../api/commands.js'
+import { isVerifiedStoredReceipt } from '../api/v2-stored-receipt.js'
 
 const numberFormat = new Intl.NumberFormat('en-PH')
 const messages = {
@@ -14,29 +14,22 @@ const messages = {
   unavailable: ['Sync status unavailable', 'The saved synchronization status could not be read. Try refreshing the status.', 'warning', 'triangle-alert'],
 }
 
-function verifiedReceipt(entry, queue) {
-  const receipt = entry.acknowledgment
-  return receipt?.replay_status === 'verified' &&
-    ['accepted', 'already_processed'].includes(receipt.outcome) &&
-    Number.isSafeInteger(receipt.commit_seq) && receipt.commit_seq > 0 &&
-    Number.isSafeInteger(queue.settingsVersion) && queue.settingsVersion > 0 &&
-    receipt.settings_version === queue.settingsVersion &&
-    sameWireUuid(receipt.server_generation_id, queue.generation) &&
-    sameWireUuid(receipt.operation_id, entry.command?.operation_id) &&
-    isWireTimestamp(receipt.processed_at)
-}
-
 function readQueueStatus(queue) {
   if (!Array.isArray(queue?.operations)) return null
   const counts = { pending: 0, synchronized: 0, review: 0 }
   let lastConfirmed = null
   let head = null
+  let lastCommit = queue.initialCommit ?? 0
   for (const entry of queue.operations) {
-    if (entry?.status === 'synchronized' && verifiedReceipt(entry, queue)) {
+    if (entry?.status === 'synchronized') {
+      if (head || !isVerifiedStoredReceipt(entry, queue) || entry.acknowledgment.commit_seq <= lastCommit) return null
+      lastCommit = entry.acknowledgment.commit_seq
       counts.synchronized++
       const confirmedAt = entry.acknowledgment.processed_at
       if (!lastConfirmed || Date.parse(confirmedAt) > Date.parse(lastConfirmed)) lastConfirmed = confirmedAt
-    } else if (entry?.status === 'pending' || (entry?.status === 'failed' && entry.resolution_status === 'needs_review')) {
+    } else if (entry?.acknowledgment === null &&
+        ((entry.status === 'pending' && entry.resolution_status === 'none') ||
+         (!head && entry.status === 'failed' && entry.resolution_status === 'needs_review'))) {
       if (entry.status === 'pending') counts.pending++
       else counts.review++
       head ??= entry

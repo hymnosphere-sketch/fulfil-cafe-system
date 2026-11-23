@@ -46,7 +46,8 @@ def main():
     from app import create_app
     from werkzeug.serving import make_server
 
-    labels = ("core", "offline", "lost", "rejected", "recovery", "seed") if options.browser_tests else ("core",)
+    labels = ("core", "offline", "lost", "rejected", "recovery", "seed",
+              "receipt_abort", "saved_receipt", "settings") if options.browser_tests else ("core",)
     with TemporaryDirectory(prefix="fulfil-fe09f-sqlite-") as temp:
         servers = []
         urls = {}

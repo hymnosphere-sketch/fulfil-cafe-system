@@ -1,6 +1,7 @@
 import { ApiClientError, createIsolatedV2SyncClient } from '../api/client.js'
 import { sameWireUuid } from '../api/commands.js'
 import { createIsolatedV2Client } from '../api/v2-client.js'
+import { isVerifiedStoredReceipt } from '../api/v2-stored-receipt.js'
 import { FE09D_TEST_CONSENT, withIsolatedV2Queue } from '../db/v2-sync-queue.js'
 
 const LOCK = 'fulfil-cafe-fe09d-ordered-sync'
@@ -9,19 +10,20 @@ function recovery(code) {
   return new ApiClientError('recovery_required', { code, outcome: 'paused', retry: 'pause' })
 }
 
-function validateDeliveryOrder(operations, initialCommit = 0) {
+function validateDeliveryOrder({ operations, initialCommit = 0, generation, settingsVersion }) {
   let next = 0
   let lastCommit = initialCommit
   for (const entry of operations) {
     if (entry.status === 'synchronized' && entry.resolution_status === 'none') {
       const receipt = entry.acknowledgment
-      if (entry !== operations[next] || !sameWireUuid(receipt?.operation_id, entry.command.operation_id) ||
-          receipt.replay_status !== 'verified' || !Number.isSafeInteger(receipt.commit_seq) || receipt.commit_seq <= lastCommit) {
+      if (entry !== operations[next] || !isVerifiedStoredReceipt(entry, { generation, settingsVersion }) ||
+          receipt.commit_seq <= lastCommit) {
         throw new Error('Stored acknowledgments do not match queue order.')
       }
       lastCommit = receipt.commit_seq
       next++
-    } else if (!((entry.status === 'pending' && entry.resolution_status === 'none') ||
+    } else if (entry.acknowledgment !== null ||
+               !((entry.status === 'pending' && entry.resolution_status === 'none') ||
                  (entry === operations[next] && entry.status === 'failed' && entry.resolution_status === 'needs_review'))) {
       throw new Error('The isolated queue has an invalid delivery state.')
     }
@@ -30,8 +32,9 @@ function validateDeliveryOrder(operations, initialCommit = 0) {
 }
 
 async function drainQueue(queue, { client, reader, signal, now, progress }, finish) {
-  const { generation, settingsVersion, operations, initialCommit } = await queue.read()
-  const { next, lastCommit } = validateDeliveryOrder(operations, initialCommit)
+  const saved = await queue.read()
+  const { generation, settingsVersion, operations, initialCommit } = saved
+  const { next, lastCommit } = validateDeliveryOrder(saved)
   let commit = lastCommit
   let verified = false
 
