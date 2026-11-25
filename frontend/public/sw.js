@@ -4,10 +4,15 @@
  * Provides offline app shell caching while preserving IndexedDB as the
  * authoritative inventory store. Does not cache mutable API responses.
  * Implements safe update lifecycle that preserves local data.
+ * Caches are versioned by build via BUILD_ID injected at build time.
  */
 
-const CACHE_NAME = 'fulfil-cafe-shell-v1';
-const STATIC_ASSETS = [
+const BUILD_ID = '__BUILD_ID__';
+const CACHE_NAME = `fulfil-cafe-shell-${BUILD_ID}`;
+const ASSET_CACHE_NAME = `fulfil-cafe-assets-${BUILD_ID}`;
+
+// Static app shell - precached on install
+const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.json',
@@ -20,7 +25,7 @@ const STATIC_ASSETS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS.map((url) => new Request(url, { credentials: 'same-origin' })));
+      return cache.addAll(APP_SHELL.map((url) => new Request(url, { credentials: 'same-origin' })));
     }).then(() => self.skipWaiting())
   );
 });
@@ -31,12 +36,31 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => name !== CACHE_NAME && name !== ASSET_CACHE_NAME)
           .map((name) => caches.delete(name))
       );
     }).then(() => self.clients.claim())
   );
 });
+
+// Helper: check if request is for a build asset (hashed filename)
+function isBuildAsset(url) {
+  const pathname = url.pathname;
+  return (
+    pathname.startsWith('/assets/') &&
+    (pathname.endsWith('.js') || pathname.endsWith('.css') || pathname.endsWith('.woff2') || pathname.endsWith('.png') || pathname.endsWith('.svg'))
+  );
+}
+
+// Helper: check if request is an API call
+function isApiRequest(url) {
+  return url.pathname.startsWith('/api/');
+}
+
+// Helper: check if request is a navigation
+function isNavigation(request) {
+  return request.mode === 'navigate';
+}
 
 // Fetch event - serve cached shell, pass through API requests
 self.addEventListener('fetch', (event) => {
@@ -49,10 +73,9 @@ self.addEventListener('fetch', (event) => {
   }
 
   // API requests - always go to network, do not cache as authoritative
-  if (url.pathname.startsWith('/api/')) {
+  if (isApiRequest(url)) {
     event.respondWith(
       fetch(request).catch(() => {
-        // Return a clear offline response for API calls
         return new Response(
           JSON.stringify({
             error: 'OFFLINE',
@@ -68,15 +91,31 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets - serve from cache with network fallback
-  event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+  // Build assets (hashed) - cache-first, long-lived
+  if (isBuildAsset(url)) {
+    event.respondWith(
+      caches.match(request, { cacheName: ASSET_CACHE_NAME }).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        return fetch(request).then((networkResponse) => {
+          if (request.method === 'GET' && networkResponse.ok) {
+            const responseClone = networkResponse.clone();
+            caches.open(ASSET_CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone);
+            });
+          }
+          return networkResponse;
+        });
+      })
+    );
+    return;
+  }
 
-      return fetch(request).then((networkResponse) => {
-        // Only cache successful GET responses for static assets
+  // App shell and other static assets - stale-while-revalidate
+  event.respondWith(
+    caches.match(request, { cacheName: CACHE_NAME }).then((cachedResponse) => {
+      const networkFetch = fetch(request).then((networkResponse) => {
         if (
           request.method === 'GET' &&
           networkResponse.ok &&
@@ -99,19 +138,23 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       }).catch(() => {
         // Offline fallback for navigation requests
-        if (request.mode === 'navigate') {
-          return caches.match('/index.html');
+        if (isNavigation(request)) {
+          return caches.match('/index.html', { cacheName: CACHE_NAME });
         }
-        // For other resources, return a generic offline response
         return new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
       });
+
+      // Return cached immediately if available, otherwise wait for network
+      return cachedResponse || networkFetch;
     })
   );
 });
 
-// Message event - handle skipWaiting for updates
+// Message event - handle skipWaiting for updates, and status queries
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') {
     self.skipWaiting();
+  } else if (event.data === 'GET_VERSION') {
+    event.ports[0].postMessage({ buildId: BUILD_ID, cacheName: CACHE_NAME });
   }
 });

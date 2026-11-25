@@ -57,10 +57,11 @@ import { deriveSyncStatus } from './services/sync-status.js'
 
 /**
  * Register the Service Worker for offline app shell support.
+ * Only runs in production (not dev) to avoid interfering with Vite HMR.
  * This runs after the application loads to avoid blocking initial render.
  */
 async function registerServiceWorker() {
-  if ('serviceWorker' in navigator) {
+  if ('serviceWorker' in navigator && !import.meta.env.DEV) {
     try {
       const registration = await navigator.serviceWorker.register('/sw.js', {
         scope: '/',
@@ -72,17 +73,20 @@ async function registerServiceWorker() {
         if (newWorker) {
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // New version available, notify user
+              // New version available, notify user - do NOT auto-reload during active work
               dispatchEvent(new CustomEvent('sw-update-available', { detail: registration }))
             }
           })
         }
       })
 
-      // Listen for controller change (update applied)
+      // Listen for controller change - but only reload if no active work
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        // Reload to use new service worker
-        window.location.reload()
+        if (!window.__pwaUpdateDeferred) {
+          window.location.reload()
+        } else {
+          console.log('[PWA] Update deferred - active work in progress')
+        }
       })
 
       console.log('[PWA] Service Worker registered:', registration.scope)
@@ -93,14 +97,57 @@ async function registerServiceWorker() {
 }
 
 /**
- * Handle PWA update notifications
+ * Handle PWA update notifications with controlled activation
  */
 function setupUpdateHandling() {
   window.addEventListener('sw-update-available', () => {
-    // The update is ready, will be applied on next navigation/reload
-    console.log('[PWA] Update available, will apply on next reload')
+    console.log('[PWA] Update available - will apply on next safe reload')
     // Could show a toast/notification here in the future
   })
+}
+
+/**
+ * Defer Service Worker reload until safe (no active inventory work)
+ */
+export function deferPwaUpdate() {
+  window.__pwaUpdateDeferred = true
+  console.log('[PWA] Update deferred')
+}
+
+/**
+ * Allow Service Worker reload when safe
+ */
+export function allowPwaUpdate() {
+  window.__pwaUpdateDeferred = false
+  if (navigator.serviceWorker.controller) {
+    console.log('[PWA] Update allowed - reloading')
+    window.location.reload()
+  }
+}
+
+/**
+ * Check if a PWA update is pending
+ */
+export async function checkPwaUpdate() {
+  if ('serviceWorker' in navigator) {
+    const registration = await navigator.serviceWorker.ready
+    if (registration.waiting) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Apply pending PWA update
+ */
+export async function applyPwaUpdate() {
+  if ('serviceWorker' in navigator) {
+    const registration = await navigator.serviceWorker.ready
+    if (registration.waiting) {
+      registration.waiting.postMessage('SKIP_WAITING')
+    }
+  }
 }
 
 function renderIcons(root) {
