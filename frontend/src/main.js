@@ -55,6 +55,54 @@ import { routeHref, routes, startRouter } from './router.js'
 import { createLocalInventorySession } from './services/local-inventory-session.js'
 import { deriveSyncStatus } from './services/sync-status.js'
 
+/**
+ * Register the Service Worker for offline app shell support.
+ * This runs after the application loads to avoid blocking initial render.
+ */
+async function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js', {
+        scope: '/',
+      })
+
+      // Check for updates periodically
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing
+        if (newWorker) {
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // New version available, notify user
+              dispatchEvent(new CustomEvent('sw-update-available', { detail: registration }))
+            }
+          })
+        }
+      })
+
+      // Listen for controller change (update applied)
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        // Reload to use new service worker
+        window.location.reload()
+      })
+
+      console.log('[PWA] Service Worker registered:', registration.scope)
+    } catch (error) {
+      console.warn('[PWA] Service Worker registration failed:', error)
+    }
+  }
+}
+
+/**
+ * Handle PWA update notifications
+ */
+function setupUpdateHandling() {
+  window.addEventListener('sw-update-available', () => {
+    // The update is ready, will be applied on next navigation/reload
+    console.log('[PWA] Update available, will apply on next reload')
+    // Could show a toast/notification here in the future
+  })
+}
+
 function renderIcons(root) {
   createIcons({
     root,
@@ -253,6 +301,17 @@ export function mountApplication(app, { demoRepository, scenario, integration } 
     })
     void session.initialize()
   }
+}
+
+// Initialize PWA features after DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    registerServiceWorker()
+    setupUpdateHandling()
+  })
+} else {
+  registerServiceWorker()
+  setupUpdateHandling()
 }
 
 const app = document.querySelector('#app')
